@@ -1,0 +1,1288 @@
+/**
+ * SAP ABAP MCP Server
+ * Main server class that handles MCP protocol communication and tool execution
+ */
+
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  Tool,
+} from '@modelcontextprotocol/sdk/types.js';
+import { ADTClient } from './clients/adt-client.js';
+import { Logger, parseLogLevel } from './utils/logger.js';
+import { MCPError, ADTError, wrapError, ErrorCodes } from './utils/errors.js';
+import { 
+  SAPConnectionConfig, 
+  MCPServerConfig,
+  CreateDataElementInput,
+  CreateDomainInput,
+  CreateTableInput,
+  CreateClassInput,
+  CreateCDSViewInput,
+  ExecuteQueryInput,
+  RunUnitTestsInput
+} from './types/index.js';
+
+// Import Input types from tools
+import {
+  // DDIC types
+  CreateStructureInput,
+  CreateTableTypeInput,
+  GetDDICObjectInput,
+  ActivateDDICObjectInput,
+  // Program types
+  CreateInterfaceInput,
+  CreateFunctionGroupInput,
+  CreateFunctionModuleInput,
+  CreateReportProgramInput,
+  GetSourceCodeInput,
+  UpdateSourceCodeInput,
+  CheckSyntaxInput,
+  ActivateObjectInput,
+  SearchObjectsInput,
+  WhereUsedInput,
+  GetObjectMetadataInput,
+  // CDS types
+  CreateServiceDefinitionInput,
+  CreateServiceBindingInput,
+  GetCDSViewInput,
+  GetCDSSourceInput,
+  UpdateCDSSourceInput,
+  ActivateCDSObjectInput,
+  GetServiceBindingUrlInput,
+  // Testing types
+  GetTestCoverageInput,
+  GetTestResultsInput,
+  AnalyzeTestClassInput,
+  // System types
+  GetSystemInfoInput,
+  GetPackageInfoInput,
+  CreatePackageInput,
+  GetMessageClassInput,
+  CreateMessageClassInput,
+  GetNumberRangeInput,
+  CreateNumberRangeInput,
+  // Transport types
+  GetTransportRequestsInput,
+  CreateTransportRequestInput,
+  ReleaseTransportRequestInput,
+  AddObjectToTransportInput,
+  GetTransportContentsInput
+} from './tools/index.js';
+
+// Tool handlers will be imported here
+import { DDICToolHandler } from './tools/ddic-tools.js';
+import { ProgramToolHandler } from './tools/program-tools.js';
+import { CDSToolHandler } from './tools/cds-tools.js';
+import { TestingToolHandler } from './tools/testing-tools.js';
+import { SystemToolHandler } from './tools/system-tools.js';
+import { TransportToolHandler } from './tools/transport-tools.js';
+
+/**
+ * Tool definition with handler
+ */
+interface ToolDefinition {
+  tool: Tool;
+  handler: (args: Record<string, unknown>) => Promise<unknown>;
+}
+
+/**
+ * SAP ABAP MCP Server class
+ * Manages MCP protocol communication and routes tool calls to appropriate handlers
+ */
+export class SAPABAPMCPServer {
+  private server: Server;
+  private adtClient: ADTClient;
+  private logger: Logger;
+  private tools: Map<string, ToolDefinition> = new Map();
+
+  // Tool handlers
+  private ddicHandler!: DDICToolHandler;
+  private programHandler!: ProgramToolHandler;
+  private cdsHandler!: CDSToolHandler;
+  private testingHandler!: TestingToolHandler;
+  private systemHandler!: SystemToolHandler;
+  private transportHandler!: TransportToolHandler;
+
+  constructor(
+    private config: MCPServerConfig,
+    private sapConfig: SAPConnectionConfig
+  ) {
+    this.logger = new Logger({ level: parseLogLevel(config.logLevel || 'info') });
+    
+    // Initialize ADT client
+    this.adtClient = new ADTClient({ 
+      connection: sapConfig, 
+      logger: this.logger,
+      timeout: config.timeout,
+      retryAttempts: config.maxRetries
+    });
+
+    // Initialize MCP server
+    this.server = new Server(
+      {
+        name: 'sap-abap-mcp-server',
+        version: '1.0.0',
+      },
+      {
+        capabilities: {
+          tools: {},
+        },
+      }
+    );
+
+    // Initialize tool handlers
+    this.initializeToolHandlers();
+
+    // Register all tools
+    this.registerTools();
+
+    // Set up request handlers
+    this.setupRequestHandlers();
+
+    // Error handling
+    this.server.onerror = (error) => {
+      this.logger.error('MCP Server Error', error);
+    };
+  }
+
+  /**
+   * Initialize all tool handlers
+   */
+  private initializeToolHandlers(): void {
+    this.ddicHandler = new DDICToolHandler(this.adtClient, this.logger);
+    this.programHandler = new ProgramToolHandler(this.adtClient, this.logger);
+    this.cdsHandler = new CDSToolHandler(this.adtClient, this.logger);
+    this.testingHandler = new TestingToolHandler(this.adtClient, this.logger);
+    this.systemHandler = new SystemToolHandler(this.adtClient, this.logger);
+    this.transportHandler = new TransportToolHandler(this.adtClient, this.logger);
+  }
+
+  /**
+   * Register all available tools
+   */
+  private registerTools(): void {
+    // DDIC Tools (P0 - Core)
+    this.registerDDICTools();
+
+    // Program Tools (P0 - Core)
+    this.registerProgramTools();
+
+    // CDS/OData Tools (P0 - Core)
+    this.registerCDSTools();
+
+    // Testing Tools (P0 - Core)
+    this.registerTestingTools();
+
+    // System Tools (P0 - Core)
+    this.registerSystemTools();
+
+    // Transport Tools (P0 - Core)
+    this.registerTransportTools();
+
+    this.logger.info(`Registered ${this.tools.size} tools`);
+  }
+
+  /**
+   * Register DDIC tools
+   */
+  private registerDDICTools(): void {
+    // create_data_element
+    this.tools.set('create_data_element', {
+      tool: {
+        name: 'create_data_element',
+        description: 'Create a new ABAP Data Element in the Data Dictionary',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Data element name (e.g., ZMYFIELD)' },
+            description: { type: 'string', description: 'Short description' },
+            domain: { type: 'string', description: 'Reference domain name (optional)' },
+            dataType: { type: 'string', description: 'Built-in data type if no domain (e.g., CHAR, NUMC, DEC)' },
+            length: { type: 'number', description: 'Field length' },
+            decimals: { type: 'number', description: 'Decimal places for numeric types' },
+            fieldLabels: {
+              type: 'object',
+              properties: {
+                short: { type: 'string', description: 'Short label (10 chars)' },
+                medium: { type: 'string', description: 'Medium label (20 chars)' },
+                long: { type: 'string', description: 'Long label (40 chars)' },
+                heading: { type: 'string', description: 'Column heading (55 chars)' },
+              },
+            },
+            package: { type: 'string', description: 'Package/devclass for the object' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'package'],
+        },
+      },
+      handler: (args) => this.ddicHandler.createDataElement(args as unknown as CreateDataElementInput),
+    });
+
+    // create_domain
+    this.tools.set('create_domain', {
+      tool: {
+        name: 'create_domain',
+        description: 'Create a new ABAP Domain in the Data Dictionary',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Domain name (e.g., ZMYDOMAIN)' },
+            description: { type: 'string', description: 'Short description' },
+            dataType: { type: 'string', description: 'Built-in ABAP type (CHAR, NUMC, DEC, DATS, TIMS, etc.)' },
+            length: { type: 'number', description: 'Field length' },
+            decimals: { type: 'number', description: 'Decimal places for numeric types' },
+            outputLength: { type: 'number', description: 'Output length for display' },
+            conversionExit: { type: 'string', description: 'Conversion exit name' },
+            signFlag: { type: 'boolean', description: 'Allow negative values' },
+            lowercase: { type: 'boolean', description: 'Allow lowercase input' },
+            fixedValues: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  low: { type: 'string' },
+                  high: { type: 'string' },
+                  description: { type: 'string' },
+                },
+              },
+              description: 'Fixed values/value range',
+            },
+            package: { type: 'string', description: 'Package/devclass for the object' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'dataType', 'length', 'package'],
+        },
+      },
+      handler: (args) => this.ddicHandler.createDomain(args as unknown as CreateDomainInput),
+    });
+
+    // create_database_table
+    this.tools.set('create_database_table', {
+      tool: {
+        name: 'create_database_table',
+        description: 'Create a new transparent database table',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Table name (e.g., ZMYTABLE)' },
+            description: { type: 'string', description: 'Short description' },
+            deliveryClass: { type: 'string', enum: ['A', 'C', 'L', 'G', 'E', 'S', 'W'], description: 'Delivery class' },
+            maintenanceFlag: { type: 'string', enum: ['X', ' '], description: 'Maintenance allowed' },
+            fields: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string', description: 'Field name' },
+                  dataElement: { type: 'string', description: 'Data element reference' },
+                  isKey: { type: 'boolean', description: 'Key field flag' },
+                  isNotNull: { type: 'boolean', description: 'Not null flag' },
+                },
+                required: ['name', 'dataElement'],
+              },
+              description: 'Table fields definition',
+            },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'deliveryClass', 'fields', 'package'],
+        },
+      },
+      handler: (args) => this.ddicHandler.createDatabaseTable(args as unknown as CreateTableInput),
+    });
+
+    // create_structure
+    this.tools.set('create_structure', {
+      tool: {
+        name: 'create_structure',
+        description: 'Create a new ABAP structure in the Data Dictionary',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Structure name (e.g., ZMYSTRUCTURE)' },
+            description: { type: 'string', description: 'Short description' },
+            components: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string', description: 'Component name' },
+                  type: { type: 'string', description: 'Data element or built-in type' },
+                },
+                required: ['name', 'type'],
+              },
+              description: 'Structure components',
+            },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'components', 'package'],
+        },
+      },
+      handler: (args) => this.ddicHandler.createStructure(args as unknown as CreateStructureInput),
+    });
+
+    // create_table_type
+    this.tools.set('create_table_type', {
+      tool: {
+        name: 'create_table_type',
+        description: 'Create a new ABAP table type in the Data Dictionary',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Table type name (e.g., ZMYTABLETYPE)' },
+            description: { type: 'string', description: 'Short description' },
+            lineType: { type: 'string', description: 'Line type (structure or data element)' },
+            accessMode: { type: 'string', enum: ['STANDARD', 'SORTED', 'HASHED'], description: 'Table access mode' },
+            keyDefinition: { type: 'string', enum: ['DEFAULT', 'EMPTY', 'COMPONENTS'], description: 'Key definition type' },
+            keyComponents: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Key component names',
+            },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'lineType', 'package'],
+        },
+      },
+      handler: (args) => this.ddicHandler.createTableType(args as unknown as CreateTableTypeInput),
+    });
+
+    // get_ddic_object
+    this.tools.set('get_ddic_object', {
+      tool: {
+        name: 'get_ddic_object',
+        description: 'Get details of a DDIC object (table, data element, domain, structure, table type)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['TABL', 'DTEL', 'DOMA', 'STRU', 'TTYP'], description: 'DDIC object type' },
+            objectName: { type: 'string', description: 'Object name' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.ddicHandler.getDDICObject(args as unknown as GetDDICObjectInput),
+    });
+
+    // activate_ddic_object
+    this.tools.set('activate_ddic_object', {
+      tool: {
+        name: 'activate_ddic_object',
+        description: 'Activate a DDIC object',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['TABL', 'DTEL', 'DOMA', 'STRU', 'TTYP'], description: 'DDIC object type' },
+            objectName: { type: 'string', description: 'Object name' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.ddicHandler.activateDDICObject(args as unknown as ActivateDDICObjectInput),
+    });
+  }
+
+  /**
+   * Register Program tools
+   */
+  private registerProgramTools(): void {
+    // create_class
+    this.tools.set('create_class', {
+      tool: {
+        name: 'create_class',
+        description: 'Create a new ABAP class',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Class name (e.g., ZCL_MYCLASS)' },
+            description: { type: 'string', description: 'Short description' },
+            superClass: { type: 'string', description: 'Super class name (optional)' },
+            interfaces: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Interfaces to implement',
+            },
+            isAbstract: { type: 'boolean', description: 'Abstract class flag' },
+            isFinal: { type: 'boolean', description: 'Final class flag' },
+            visibility: { type: 'string', enum: ['PUBLIC', 'PROTECTED', 'PRIVATE'], description: 'Default visibility' },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'package'],
+        },
+      },
+      handler: (args) => this.programHandler.createClass(args as unknown as CreateClassInput),
+    });
+
+    // create_interface
+    this.tools.set('create_interface', {
+      tool: {
+        name: 'create_interface',
+        description: 'Create a new ABAP interface',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Interface name (e.g., ZIF_MYINTERFACE)' },
+            description: { type: 'string', description: 'Short description' },
+            methods: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  description: { type: 'string' },
+                  importing: { type: 'array', items: { type: 'object' } },
+                  exporting: { type: 'array', items: { type: 'object' } },
+                  returning: { type: 'object' },
+                  exceptions: { type: 'array', items: { type: 'string' } },
+                },
+                required: ['name'],
+              },
+              description: 'Interface methods',
+            },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'package'],
+        },
+      },
+      handler: (args) => this.programHandler.createInterface(args as unknown as CreateInterfaceInput),
+    });
+
+    // create_function_group
+    this.tools.set('create_function_group', {
+      tool: {
+        name: 'create_function_group',
+        description: 'Create a new function group',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Function group name (e.g., ZMYFUGR)' },
+            description: { type: 'string', description: 'Short description' },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'package'],
+        },
+      },
+      handler: (args) => this.programHandler.createFunctionGroup(args as unknown as CreateFunctionGroupInput),
+    });
+
+    // create_function_module
+    this.tools.set('create_function_module', {
+      tool: {
+        name: 'create_function_module',
+        description: 'Create a new function module',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Function module name (e.g., Z_MY_FUNCTION)' },
+            functionGroup: { type: 'string', description: 'Function group name' },
+            description: { type: 'string', description: 'Short description' },
+            importing: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  type: { type: 'string' },
+                  optional: { type: 'boolean' },
+                  default: { type: 'string' },
+                  description: { type: 'string' },
+                },
+                required: ['name', 'type'],
+              },
+              description: 'Importing parameters',
+            },
+            exporting: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  type: { type: 'string' },
+                  description: { type: 'string' },
+                },
+                required: ['name', 'type'],
+              },
+              description: 'Exporting parameters',
+            },
+            changing: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  type: { type: 'string' },
+                  optional: { type: 'boolean' },
+                  description: { type: 'string' },
+                },
+                required: ['name', 'type'],
+              },
+              description: 'Changing parameters',
+            },
+            tables: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  type: { type: 'string' },
+                  optional: { type: 'boolean' },
+                  description: { type: 'string' },
+                },
+                required: ['name', 'type'],
+              },
+              description: 'Tables parameters',
+            },
+            exceptions: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Exceptions',
+            },
+            isRFC: { type: 'boolean', description: 'RFC enabled flag' },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'functionGroup', 'description', 'package'],
+        },
+      },
+      handler: (args) => this.programHandler.createFunctionModule(args as unknown as CreateFunctionModuleInput),
+    });
+
+    // create_report
+    this.tools.set('create_report', {
+      tool: {
+        name: 'create_report',
+        description: 'Create a new ABAP report program',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Report name (e.g., ZMYREPORT)' },
+            description: { type: 'string', description: 'Short description' },
+            reportType: { type: 'string', enum: ['EXECUTABLE', 'INCLUDE', 'MODULE_POOL'], description: 'Report type' },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'package'],
+        },
+      },
+      handler: (args) => this.programHandler.createReportProgram(args as unknown as CreateReportProgramInput),
+    });
+
+    // get_source_code
+    this.tools.set('get_source_code', {
+      tool: {
+        name: 'get_source_code',
+        description: 'Get the source code of an ABAP object (class, interface, program, function module)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC'], description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.programHandler.getSourceCode(args as unknown as GetSourceCodeInput),
+    });
+
+    // update_source_code
+    this.tools.set('update_source_code', {
+      tool: {
+        name: 'update_source_code',
+        description: 'Update the source code of an ABAP object',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC'], description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+            source: { type: 'string', description: 'New source code' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['objectType', 'objectName', 'source'],
+        },
+      },
+      handler: (args) => this.programHandler.updateSourceCode(args as unknown as UpdateSourceCodeInput),
+    });
+
+    // search_objects
+    this.tools.set('search_objects', {
+      tool: {
+        name: 'search_objects',
+        description: 'Search for ABAP objects by name pattern',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query (supports wildcards *)' },
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC', 'TABL', 'DTEL', 'DOMA'], description: 'Filter by object type' },
+            maxResults: { type: 'number', description: 'Maximum number of results (default 100)' },
+          },
+          required: ['query'],
+        },
+      },
+      handler: (args) => this.programHandler.searchObjects(args as unknown as SearchObjectsInput),
+    });
+
+    // where_used
+    this.tools.set('where_used', {
+      tool: {
+        name: 'where_used',
+        description: 'Find where an object is used',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC', 'TABL', 'DTEL', 'DOMA'], description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.programHandler.whereUsed(args as unknown as WhereUsedInput),
+    });
+
+    // get_object_metadata
+    this.tools.set('get_object_metadata', {
+      tool: {
+        name: 'get_object_metadata',
+        description: 'Get metadata information about an ABAP object',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC', 'TABL', 'DTEL', 'DOMA'], description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.programHandler.getObjectMetadata(args as unknown as GetObjectMetadataInput),
+    });
+
+    // activate_object
+    this.tools.set('activate_object', {
+      tool: {
+        name: 'activate_object',
+        description: 'Activate an ABAP object (class, interface, function module, report)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG'], description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.programHandler.activateObject(args as unknown as ActivateObjectInput),
+    });
+
+    // check_syntax
+    this.tools.set('check_syntax', {
+      tool: {
+        name: 'check_syntax',
+        description: 'Check syntax of an ABAP object',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG'], description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.programHandler.checkSyntax(args as unknown as CheckSyntaxInput),
+    });
+  }
+
+  /**
+   * Register CDS/OData tools
+   */
+  private registerCDSTools(): void {
+    // create_cds_view
+    this.tools.set('create_cds_view', {
+      tool: {
+        name: 'create_cds_view',
+        description: 'Create a new CDS view',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'CDS view name (e.g., ZCDS_MYVIEW)' },
+            description: { type: 'string', description: 'Short description' },
+            sqlViewName: { type: 'string', description: 'SQL view name (max 16 chars)' },
+            dataSource: { type: 'string', description: 'Primary data source (table or CDS view)' },
+            fields: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  source: { type: 'string' },
+                  alias: { type: 'string' },
+                },
+                required: ['name'],
+              },
+              description: 'Field definitions',
+            },
+            associations: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  target: { type: 'string' },
+                  cardinality: { type: 'string' },
+                  condition: { type: 'string' },
+                },
+                required: ['name', 'target'],
+              },
+              description: 'Association definitions',
+            },
+            annotations: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'CDS annotations',
+            },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'sqlViewName', 'dataSource', 'fields', 'package'],
+        },
+      },
+      handler: (args) => this.cdsHandler.createCDSView(args as unknown as CreateCDSViewInput),
+    });
+
+    // create_service_definition
+    this.tools.set('create_service_definition', {
+      tool: {
+        name: 'create_service_definition',
+        description: 'Create a new OData service definition',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Service definition name (e.g., ZSRV_MYSERVICE)' },
+            description: { type: 'string', description: 'Short description' },
+            exposedEntities: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  cdsView: { type: 'string' },
+                  alias: { type: 'string' },
+                },
+                required: ['cdsView'],
+              },
+              description: 'Entities to expose',
+            },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'exposedEntities', 'package'],
+        },
+      },
+      handler: (args) => this.cdsHandler.createServiceDefinition(args as unknown as CreateServiceDefinitionInput),
+    });
+
+    // create_service_binding
+    this.tools.set('create_service_binding', {
+      tool: {
+        name: 'create_service_binding',
+        description: 'Create a new OData service binding',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Service binding name (e.g., ZSRVB_MYSERVICE)' },
+            description: { type: 'string', description: 'Short description' },
+            serviceDefinition: { type: 'string', description: 'Service definition name' },
+            bindingType: { type: 'string', enum: ['ODATA_V2', 'ODATA_V4'], description: 'OData version' },
+            package: { type: 'string', description: 'Package/devclass' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'serviceDefinition', 'bindingType', 'package'],
+        },
+      },
+      handler: (args) => this.cdsHandler.createServiceBinding(args as unknown as CreateServiceBindingInput),
+    });
+
+    // get_cds_view
+    this.tools.set('get_cds_view', {
+      tool: {
+        name: 'get_cds_view',
+        description: 'Get CDS view definition and metadata',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            cdsViewName: { type: 'string', description: 'CDS view name' },
+          },
+          required: ['cdsViewName'],
+        },
+      },
+      handler: (args) => this.cdsHandler.getCDSView(args as unknown as GetCDSViewInput),
+    });
+
+    // get_service_binding_url
+    this.tools.set('get_service_binding_url', {
+      tool: {
+        name: 'get_service_binding_url',
+        description: 'Get the URL of a service binding',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            serviceBindingName: { type: 'string', description: 'Service binding name' },
+          },
+          required: ['serviceBindingName'],
+        },
+      },
+      handler: (args) => this.cdsHandler.getServiceBindingUrl(args as unknown as GetServiceBindingUrlInput),
+    });
+
+    // get_cds_source
+    this.tools.set('get_cds_source', {
+      tool: {
+        name: 'get_cds_source',
+        description: 'Get the source code of a CDS view',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            cdsViewName: { type: 'string', description: 'CDS view name' },
+          },
+          required: ['cdsViewName'],
+        },
+      },
+      handler: (args) => this.cdsHandler.getCDSSource(args as unknown as GetCDSSourceInput),
+    });
+
+    // update_cds_source
+    this.tools.set('update_cds_source', {
+      tool: {
+        name: 'update_cds_source',
+        description: 'Update the source code of a CDS view',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            cdsViewName: { type: 'string', description: 'CDS view name' },
+            source: { type: 'string', description: 'New source code' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['cdsViewName', 'source'],
+        },
+      },
+      handler: (args) => this.cdsHandler.updateCDSSource(args as unknown as UpdateCDSSourceInput),
+    });
+
+    // activate_cds_object
+    this.tools.set('activate_cds_object', {
+      tool: {
+        name: 'activate_cds_object',
+        description: 'Activate a CDS view or service',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['DDLS', 'SRVD', 'SRVB'], description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.cdsHandler.activateCDSObject(args as unknown as ActivateCDSObjectInput),
+    });
+  }
+
+  /**
+   * Register Testing tools
+   */
+  private registerTestingTools(): void {
+    // run_unit_tests
+    this.tools.set('run_unit_tests', {
+      tool: {
+        name: 'run_unit_tests',
+        description: 'Run ABAP unit tests for a class or package',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['CLAS', 'DEVC'], description: 'Object type (class or package)' },
+            objectName: { type: 'string', description: 'Object name' },
+            withCoverage: { type: 'boolean', description: 'Include code coverage' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.testingHandler.runUnitTests(args as unknown as RunUnitTestsInput),
+    });
+
+    // get_test_coverage
+    this.tools.set('get_test_coverage', {
+      tool: {
+        name: 'get_test_coverage',
+        description: 'Get code coverage results for a class',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            className: { type: 'string', description: 'Class name' },
+          },
+          required: ['className'],
+        },
+      },
+      handler: (args) => this.testingHandler.getTestCoverage(args as unknown as GetTestCoverageInput),
+    });
+
+    // get_test_results
+    this.tools.set('get_test_results', {
+      tool: {
+        name: 'get_test_results',
+        description: 'Get results of a previous test run',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            runId: { type: 'string', description: 'Test run ID' },
+          },
+          required: ['runId'],
+        },
+      },
+      handler: (args) => this.testingHandler.getTestResults(args as unknown as GetTestResultsInput),
+    });
+
+    // analyze_test_class
+    this.tools.set('analyze_test_class', {
+      tool: {
+        name: 'analyze_test_class',
+        description: 'Analyze a test class structure and methods',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            className: { type: 'string', description: 'Test class name' },
+          },
+          required: ['className'],
+        },
+      },
+      handler: (args) => this.testingHandler.analyzeTestClass(args as unknown as AnalyzeTestClassInput),
+    });
+  }
+
+  /**
+   * Register System tools
+   */
+  private registerSystemTools(): void {
+    // get_system_info
+    this.tools.set('get_system_info', {
+      tool: {
+        name: 'get_system_info',
+        description: 'Get SAP system information',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
+      },
+      handler: (args) => this.systemHandler.getSystemInfo(args as unknown as GetSystemInfoInput),
+    });
+
+    // get_package_info
+    this.tools.set('get_package_info', {
+      tool: {
+        name: 'get_package_info',
+        description: 'Get package information and contents',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            packageName: { type: 'string', description: 'Package name' },
+          },
+          required: ['packageName'],
+        },
+      },
+      handler: (args) => this.systemHandler.getPackageInfo(args as unknown as GetPackageInfoInput),
+    });
+
+    // create_package
+    this.tools.set('create_package', {
+      tool: {
+        name: 'create_package',
+        description: 'Create a new package',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Package name' },
+            description: { type: 'string', description: 'Package description' },
+            superPackage: { type: 'string', description: 'Super package (optional)' },
+            softwareComponent: { type: 'string', description: 'Software component (optional)' },
+            applicationComponent: { type: 'string', description: 'Application component (optional)' },
+            transportLayer: { type: 'string', description: 'Transport layer (optional)' },
+            packageType: { type: 'string', enum: ['development', 'structure', 'main'], description: 'Package type' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description'],
+        },
+      },
+      handler: (args) => this.systemHandler.createPackage(args as unknown as CreatePackageInput),
+    });
+
+    // get_message_class
+    this.tools.set('get_message_class', {
+      tool: {
+        name: 'get_message_class',
+        description: 'Get message class definition',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            messageClassName: { type: 'string', description: 'Message class name' },
+          },
+          required: ['messageClassName'],
+        },
+      },
+      handler: (args) => this.systemHandler.getMessageClass(args as unknown as GetMessageClassInput),
+    });
+
+    // create_message_class
+    this.tools.set('create_message_class', {
+      tool: {
+        name: 'create_message_class',
+        description: 'Create a new message class',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Message class name' },
+            description: { type: 'string', description: 'Description' },
+            messages: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  number: { type: 'string', description: 'Message number (000-999)' },
+                  shortText: { type: 'string', description: 'Message text' },
+                  selfExplanatory: { type: 'boolean', description: 'Self-explanatory flag' },
+                },
+                required: ['number', 'shortText'],
+              },
+              description: 'Message definitions',
+            },
+            packageName: { type: 'string', description: 'Package name' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'packageName'],
+        },
+      },
+      handler: (args) => this.systemHandler.createMessageClass(args as unknown as CreateMessageClassInput),
+    });
+
+    // get_number_range
+    this.tools.set('get_number_range', {
+      tool: {
+        name: 'get_number_range',
+        description: 'Get number range object definition',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectName: { type: 'string', description: 'Number range object name' },
+          },
+          required: ['objectName'],
+        },
+      },
+      handler: (args) => this.systemHandler.getNumberRange(args as unknown as GetNumberRangeInput),
+    });
+
+    // create_number_range
+    this.tools.set('create_number_range', {
+      tool: {
+        name: 'create_number_range',
+        description: 'Create a new number range object',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Number range object name' },
+            description: { type: 'string', description: 'Description' },
+            domainName: { type: 'string', description: 'Domain name (optional)' },
+            numberLength: { type: 'number', description: 'Number length' },
+            percentage: { type: 'number', description: 'Warning percentage (optional)' },
+            intervals: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  subObject: { type: 'string', description: 'Sub-object (optional)' },
+                  fromNumber: { type: 'string', description: 'From number' },
+                  toNumber: { type: 'string', description: 'To number' },
+                  currentNumber: { type: 'string', description: 'Current number (optional)' },
+                  external: { type: 'boolean', description: 'External number assignment' },
+                },
+                required: ['fromNumber', 'toNumber'],
+              },
+              description: 'Number range intervals',
+            },
+            packageName: { type: 'string', description: 'Package name' },
+            transportRequest: { type: 'string', description: 'Transport request number' },
+          },
+          required: ['name', 'description', 'numberLength', 'intervals', 'packageName'],
+        },
+      },
+      handler: (args) => this.systemHandler.createNumberRange(args as unknown as CreateNumberRangeInput),
+    });
+  }
+
+  /**
+   * Register Transport tools
+   */
+  private registerTransportTools(): void {
+    // get_transport_requests
+    this.tools.set('get_transport_requests', {
+      tool: {
+        name: 'get_transport_requests',
+        description: 'Get list of transport requests',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            user: { type: 'string', description: 'Filter by user (optional)' },
+            status: { type: 'string', enum: ['MODIFIABLE', 'RELEASED', 'ALL'], description: 'Filter by status' },
+            type: { type: 'string', enum: ['WORKBENCH', 'CUSTOMIZING', 'ALL'], description: 'Filter by type' },
+          },
+          required: [],
+        },
+      },
+      handler: (args) => this.transportHandler.getTransportRequests(args as unknown as GetTransportRequestsInput),
+    });
+
+    // create_transport_request
+    this.tools.set('create_transport_request', {
+      tool: {
+        name: 'create_transport_request',
+        description: 'Create a new transport request',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            description: { type: 'string', description: 'Transport request description' },
+            type: { type: 'string', enum: ['WORKBENCH', 'CUSTOMIZING'], description: 'Request type' },
+            targetSystem: { type: 'string', description: 'Target system (optional)' },
+          },
+          required: ['description', 'type'],
+        },
+      },
+      handler: (args) => this.transportHandler.createTransportRequest(args as unknown as CreateTransportRequestInput),
+    });
+
+    // add_object_to_transport
+    this.tools.set('add_object_to_transport', {
+      tool: {
+        name: 'add_object_to_transport',
+        description: 'Add an object to a transport request',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            requestNumber: { type: 'string', description: 'Transport request number' },
+            pgmid: { type: 'string', description: 'Program ID (e.g., R3TR, LIMU)' },
+            objectType: { type: 'string', description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+            taskNumber: { type: 'string', description: 'Task number (optional)' },
+          },
+          required: ['requestNumber', 'pgmid', 'objectType', 'objectName'],
+        },
+      },
+      handler: (args) => this.transportHandler.addObjectToTransport(args as unknown as AddObjectToTransportInput),
+    });
+
+    // release_transport_request
+    this.tools.set('release_transport_request', {
+      tool: {
+        name: 'release_transport_request',
+        description: 'Release a transport request',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            requestNumber: { type: 'string', description: 'Transport request number' },
+            releaseTasks: { type: 'boolean', description: 'Release tasks first if present' },
+          },
+          required: ['requestNumber'],
+        },
+      },
+      handler: (args) => this.transportHandler.releaseTransportRequest(args as unknown as ReleaseTransportRequestInput),
+    });
+
+    // get_transport_contents
+    this.tools.set('get_transport_contents', {
+      tool: {
+        name: 'get_transport_contents',
+        description: 'Get objects in a transport request',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            requestNumber: { type: 'string', description: 'Transport request number' },
+            includeTasks: { type: 'boolean', description: 'Include task details' },
+          },
+          required: ['requestNumber'],
+        },
+      },
+      handler: (args) => this.transportHandler.getTransportContents(args as unknown as GetTransportContentsInput),
+    });
+  }
+
+  /**
+   * Set up MCP request handlers
+   */
+  private setupRequestHandlers(): void {
+    // Handle list tools request
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      const tools = Array.from(this.tools.values()).map((t) => t.tool);
+      return { tools };
+    });
+
+    // Handle tool execution
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+      const startTime = Date.now();
+
+      this.logger.mcpToolCall(name, args as Record<string, unknown>);
+
+      const toolDef = this.tools.get(name);
+      if (!toolDef) {
+        const error = `Unknown tool: ${name}`;
+        this.logger.mcpToolResult(name, false, Date.now() - startTime);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error }) }],
+          isError: true,
+        };
+      }
+
+      try {
+        const result = await toolDef.handler(args || {});
+        this.logger.mcpToolResult(name, true, Date.now() - startTime);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error) {
+        const wrappedError = wrapError(error, ErrorCodes.TOOL_EXECUTION_FAILED);
+        this.logger.mcpToolResult(name, false, Date.now() - startTime);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: wrappedError.message, code: wrappedError.code }) }],
+          isError: true,
+        };
+      }
+    });
+  }
+
+  /**
+   * Start the MCP server
+   */
+  async start(): Promise<void> {
+    // Test connection to SAP system
+    this.logger.info('Testing connection to SAP system...');
+    const connected = await this.adtClient.testConnection();
+    if (!connected) {
+      throw new ADTError('Failed to connect to SAP system', ErrorCodes.CONNECTION_FAILED);
+    }
+    this.logger.info('Successfully connected to SAP system');
+
+    // Start MCP server with stdio transport
+    const transport = new StdioServerTransport();
+    await this.server.connect(transport);
+    this.logger.info('SAP ABAP MCP Server started');
+  }
+
+  /**
+   * Stop the MCP server
+   */
+  async stop(): Promise<void> {
+    await this.server.close();
+    this.logger.info('SAP ABAP MCP Server stopped');
+  }
+}
