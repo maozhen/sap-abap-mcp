@@ -218,7 +218,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'package'],
         },
       },
-      handler: (args) => this.ddicHandler.createDataElement(args as unknown as CreateDataElementInput),
+      handler: (args) => this.ddicHandler.createDataElement(this.mapArgs<CreateDataElementInput>(args)),
     });
 
     // create_domain
@@ -256,7 +256,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'dataType', 'length', 'package'],
         },
       },
-      handler: (args) => this.ddicHandler.createDomain(args as unknown as CreateDomainInput),
+      handler: (args) => this.ddicHandler.createDomain(this.mapArgs<CreateDomainInput>(args)),
     });
 
     // create_database_table
@@ -291,7 +291,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'deliveryClass', 'fields', 'package'],
         },
       },
-      handler: (args) => this.ddicHandler.createDatabaseTable(args as unknown as CreateTableInput),
+      handler: (args) => this.ddicHandler.createDatabaseTable(this.mapArgs<CreateTableInput>(args)),
     });
 
     // create_structure
@@ -322,7 +322,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'components', 'package'],
         },
       },
-      handler: (args) => this.ddicHandler.createStructure(args as unknown as CreateStructureInput),
+      handler: (args) => this.ddicHandler.createStructure(this.mapArgs<CreateStructureInput>(args)),
     });
 
     // create_table_type
@@ -349,7 +349,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'lineType', 'package'],
         },
       },
-      handler: (args) => this.ddicHandler.createTableType(args as unknown as CreateTableTypeInput),
+      handler: (args) => this.ddicHandler.createTableType(this.mapArgs<CreateTableTypeInput>(args)),
     });
 
     // get_ddic_object
@@ -416,7 +416,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'package'],
         },
       },
-      handler: (args) => this.programHandler.createClass(args as unknown as CreateClassInput),
+      handler: (args) => this.programHandler.createClass(this.mapArgs<CreateClassInput>(args)),
     });
 
     // create_interface
@@ -451,7 +451,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'package'],
         },
       },
-      handler: (args) => this.programHandler.createInterface(args as unknown as CreateInterfaceInput),
+      handler: (args) => this.programHandler.createInterface(this.mapArgs<CreateInterfaceInput>(args)),
     });
 
     // create_function_group
@@ -470,7 +470,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'package'],
         },
       },
-      handler: (args) => this.programHandler.createFunctionGroup(args as unknown as CreateFunctionGroupInput),
+      handler: (args) => this.programHandler.createFunctionGroup(this.mapArgs<CreateFunctionGroupInput>(args)),
     });
 
     // create_function_module
@@ -552,7 +552,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'functionGroup', 'description', 'package'],
         },
       },
-      handler: (args) => this.programHandler.createFunctionModule(args as unknown as CreateFunctionModuleInput),
+      handler: (args) => this.programHandler.createFunctionModule(this.mapArgs<CreateFunctionModuleInput>(args)),
     });
 
     // create_report
@@ -572,7 +572,15 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'package'],
         },
       },
-      handler: (args) => this.programHandler.createReportProgram(args as unknown as CreateReportProgramInput),
+      handler: (args) => {
+        // Map 'package' to 'packageName' and 'reportType' to 'programType'
+        const mappedArgs = {
+          ...args,
+          packageName: (args as Record<string, unknown>).package as string,
+          programType: this.mapReportType((args as Record<string, unknown>).reportType as string),
+        };
+        return this.programHandler.createReportProgram(mappedArgs as unknown as CreateReportProgramInput);
+      },
     });
 
     // get_source_code
@@ -589,7 +597,7 @@ export class SAPABAPMCPServer {
           required: ['objectType', 'objectName'],
         },
       },
-      handler: (args) => this.programHandler.getSourceCode(args as unknown as GetSourceCodeInput),
+      handler: (args) => this.programHandler.getSourceCode(this.mapObjectTypeNameToUri(args) as unknown as GetSourceCodeInput),
     });
 
     // update_source_code
@@ -608,7 +616,7 @@ export class SAPABAPMCPServer {
           required: ['objectType', 'objectName', 'source'],
         },
       },
-      handler: (args) => this.programHandler.updateSourceCode(args as unknown as UpdateSourceCodeInput),
+      handler: (args) => this.programHandler.updateSourceCode(this.mapObjectTypeNameToUri(args) as unknown as UpdateSourceCodeInput),
     });
 
     // search_objects
@@ -643,7 +651,7 @@ export class SAPABAPMCPServer {
           required: ['objectType', 'objectName'],
         },
       },
-      handler: (args) => this.programHandler.whereUsed(args as unknown as WhereUsedInput),
+      handler: (args) => this.programHandler.whereUsed(this.mapObjectTypeNameToUri(args) as unknown as WhereUsedInput),
     });
 
     // get_object_metadata
@@ -660,7 +668,7 @@ export class SAPABAPMCPServer {
           required: ['objectType', 'objectName'],
         },
       },
-      handler: (args) => this.programHandler.getObjectMetadata(args as unknown as GetObjectMetadataInput),
+      handler: (args) => this.programHandler.getObjectMetadata(this.mapObjectTypeNameToUri(args) as unknown as GetObjectMetadataInput),
     });
 
     // activate_object
@@ -677,7 +685,7 @@ export class SAPABAPMCPServer {
           required: ['objectType', 'objectName'],
         },
       },
-      handler: (args) => this.programHandler.activateObject(args as unknown as ActivateObjectInput),
+      handler: (args) => this.programHandler.activateObject(this.mapObjectTypeNameToUri(args) as unknown as ActivateObjectInput),
     });
 
     // check_syntax
@@ -694,7 +702,7 @@ export class SAPABAPMCPServer {
           required: ['objectType', 'objectName'],
         },
       },
-      handler: (args) => this.programHandler.checkSyntax(args as unknown as CheckSyntaxInput),
+      handler: (args) => this.programHandler.checkSyntax(this.mapObjectTypeNameToUri(args) as unknown as CheckSyntaxInput),
     });
   }
 
@@ -752,7 +760,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'sqlViewName', 'dataSource', 'fields', 'package'],
         },
       },
-      handler: (args) => this.cdsHandler.createCDSView(args as unknown as CreateCDSViewInput),
+      handler: (args) => this.cdsHandler.createCDSView(this.mapArgs<CreateCDSViewInput>(args)),
     });
 
     // create_service_definition
@@ -783,7 +791,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'exposedEntities', 'package'],
         },
       },
-      handler: (args) => this.cdsHandler.createServiceDefinition(args as unknown as CreateServiceDefinitionInput),
+      handler: (args) => this.cdsHandler.createServiceDefinition(this.mapArgs<CreateServiceDefinitionInput>(args)),
     });
 
     // create_service_binding
@@ -804,7 +812,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'description', 'serviceDefinition', 'bindingType', 'package'],
         },
       },
-      handler: (args) => this.cdsHandler.createServiceBinding(args as unknown as CreateServiceBindingInput),
+      handler: (args) => this.cdsHandler.createServiceBinding(this.mapArgs<CreateServiceBindingInput>(args)),
     });
 
     // get_cds_view
@@ -1284,5 +1292,86 @@ export class SAPABAPMCPServer {
   async stop(): Promise<void> {
     await this.server.close();
     this.logger.info('SAP ABAP MCP Server stopped');
+  }
+
+  /**
+   * Map objectType + objectName to objectUri
+   * Converts MCP schema input (objectType, objectName) to handler input (objectUri)
+   */
+  private mapObjectTypeNameToUri(args: Record<string, unknown>): Record<string, unknown> {
+    const mapped: Record<string, unknown> = { ...args };
+    
+    // If objectUri is already provided, use it directly
+    if (args.objectUri) {
+      return mapped;
+    }
+    
+    const objectType = args.objectType as string;
+    const objectName = args.objectName as string;
+    
+    if (!objectType || !objectName) {
+      return mapped;
+    }
+    
+    // URI prefix mapping based on object type
+    const uriPrefixes: Record<string, string> = {
+      'CLAS': '/sap/bc/adt/oo/classes/',
+      'INTF': '/sap/bc/adt/oo/interfaces/',
+      'FUGR': '/sap/bc/adt/functions/groups/',
+      'FUNC': '/sap/bc/adt/functions/',
+      'PROG': '/sap/bc/adt/programs/programs/',
+      'REPS': '/sap/bc/adt/programs/programs/',
+      'INCL': '/sap/bc/adt/programs/includes/',
+    };
+    
+    const prefix = uriPrefixes[objectType.toUpperCase()];
+    if (prefix) {
+      mapped.objectUri = `${prefix}${objectName.toLowerCase()}`;
+    }
+    
+    return mapped;
+  }
+
+  /**
+   * Map report type from MCP schema values to CreateReportProgramInput values
+   */
+  private mapReportType(reportType: string | undefined): 'executable' | 'include' | 'modulePool' | 'subroutinePool' {
+    if (!reportType) return 'executable';
+    
+    const mapping: Record<string, 'executable' | 'include' | 'modulePool' | 'subroutinePool'> = {
+      'EXECUTABLE': 'executable',
+      'INCLUDE': 'include',
+      'MODULE_POOL': 'modulePool',
+      'SUBROUTINE_POOL': 'subroutinePool',
+      // Also support lowercase
+      'executable': 'executable',
+      'include': 'include',
+      'modulePool': 'modulePool',
+      'subroutinePool': 'subroutinePool',
+    };
+    
+    return mapping[reportType] || 'executable';
+  }
+
+  /**
+   * Map MCP schema property names to handler input property names
+   * Common mappings:
+   * - 'package' -> 'packageName'
+   * - 'domain' -> 'domainName'  
+   */
+  private mapArgs<T>(args: Record<string, unknown>): T {
+    const mapped: Record<string, unknown> = { ...args };
+    
+    // Map 'package' to 'packageName'
+    if ('package' in args && !('packageName' in args)) {
+      mapped.packageName = args.package;
+    }
+    
+    // Map 'domain' to 'domainName' for data elements
+    if ('domain' in args && !('domainName' in args)) {
+      mapped.domainName = args.domain;
+    }
+    
+    return mapped as T;
   }
 }

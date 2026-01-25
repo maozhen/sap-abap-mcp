@@ -133,6 +133,28 @@ export interface WhereUsedInput {
   objectType: ADTObjectType;
 }
 
+/**
+ * Where Used scope data structure
+ * Contains configuration returned from the scope API call
+ */
+interface WhereUsedScopeData {
+  objectIdentifier: {
+    displayName: string;
+    globalType: string;
+  };
+  grade: {
+    definitions: boolean;
+    elements: boolean;
+    indirectReferences: boolean;
+  };
+  objectTypes: Array<{
+    name: string;
+    isDefault: boolean;
+    isSelected: boolean;
+  }>;
+  payload: string;
+}
+
 // ============================================================================
 // URI Prefixes
 // ============================================================================
@@ -478,7 +500,11 @@ export class ProgramToolHandler {
 
   /**
    * Find where an object is used
-   * SAP ADT API requires the 'uri' query parameter with the full object URI
+   * SAP ADT API uses a two-step process:
+   * 1. POST to /usageReferences/scope to get scope configuration
+   * 2. POST to /usageReferences with the scope to execute the query
+   * 
+   * The uri parameter must be passed as a query parameter
    */
   async whereUsed(args: WhereUsedInput): Promise<ToolResponse<WhereUsedResult>> {
     this.logger.info(`Finding where used: ${args.objectName}`);
@@ -490,18 +516,38 @@ export class ProgramToolHandler {
         normalizedUri = `/sap/bc/adt${normalizedUri.startsWith('/') ? '' : '/'}${normalizedUri}`;
       }
 
-      // SAP ADT Where Used API requires 'uri' query parameter
-      // The URI must be the full path including /sap/bc/adt prefix
+      // Step 1: Get scope configuration
+      const scopeRequestXml = this.buildWhereUsedScopeRequestXML();
+      this.logger.debug(`Where used scope request for URI: ${normalizedUri}`);
+      
+      const scopeResponse = await this.adtClient.post(
+        '/repository/informationsystem/usageReferences/scope',
+        scopeRequestXml,
+        {
+          params: { uri: normalizedUri },
+          headers: {
+            'Content-Type': 'application/vnd.sap.adt.repository.usagereferences.scope.request.v1+xml',
+            'Accept': 'application/vnd.sap.adt.repository.usagereferences.scope.response.v1+xml',
+          },
+        }
+      );
+
+      // Parse scope response to get objectIdentifier, grade, objectTypes, and payload
+      const scopeData = this.parseWhereUsedScopeResponse(scopeResponse.raw || '');
+      this.logger.debug(`Scope data received: ${JSON.stringify(scopeData)}`);
+
+      // Step 2: Execute where used query with scope
+      const queryRequestXml = this.buildWhereUsedQueryRequestXML(scopeData);
+      
       const response = await this.adtClient.post(
         '/repository/informationsystem/usageReferences',
-        '', // Empty body - SAP ADT expects uri as query parameter
+        queryRequestXml,
         {
-          headers: { 
-            'Accept': 'application/vnd.sap.adt.repository.usagereferences.result.v1+xml, application/xml, */*'
+          params: { uri: normalizedUri },
+          headers: {
+            'Content-Type': 'application/vnd.sap.adt.repository.usagereferences.request.v1+xml',
+            'Accept': 'application/vnd.sap.adt.repository.usagereferences.result.v1+xml',
           },
-          params: {
-            uri: normalizedUri
-          }
         }
       );
 
@@ -680,15 +726,119 @@ export class ProgramToolHandler {
     return buildXML(obj);
   }
 
-  private buildWhereUsedRequestXML(args: WhereUsedInput): string {
+  /**
+   * Build XML for Where Used scope request
+   * Based on SAP ADT HTTP trace - uses namespace http://www.sap.com/adt/ris/usageReferences
+   */
+  private buildWhereUsedScopeRequestXML(): string {
+    const obj = {
+      'usagereferences:usageScopeRequest': {
+        '@_xmlns:usagereferences': 'http://www.sap.com/adt/ris/usageReferences',
+        'usagereferences:affectedObjects': {},
+      },
+    };
+    return buildXML(obj);
+  }
+
+  /**
+   * Parse Where Used scope response to extract scope configuration
+   */
+  private parseWhereUsedScopeResponse(xml: string): WhereUsedScopeData {
+    const defaultScope: WhereUsedScopeData = {
+      objectIdentifier: { displayName: '', globalType: '' },
+      grade: { definitions: true, elements: true, indirectReferences: true },
+      objectTypes: [],
+      payload: '',
+    };
+
+    if (!xml) return defaultScope;
+
+    try {
+      const parsed = parseXML<Record<string, unknown>>(xml);
+      
+      // Find objectIdentifier
+      const objectIdentifiers = this.findElements(parsed, 'objectIdentifier');
+      if (objectIdentifiers.length > 0) {
+        const objId = objectIdentifiers[0] as Record<string, unknown>;
+        defaultScope.objectIdentifier = {
+          displayName: getAttribute(objId, 'displayName') || '',
+          globalType: getAttribute(objId, 'globalType') || '',
+        };
+      }
+
+      // Find grade
+      const grades = this.findElements(parsed, 'grade');
+      if (grades.length > 0) {
+        const grade = grades[0] as Record<string, unknown>;
+        defaultScope.grade = {
+          definitions: getAttribute(grade, 'definitions') === 'true',
+          elements: getAttribute(grade, 'elements') === 'true',
+          indirectReferences: getAttribute(grade, 'indirectReferences') === 'true',
+        };
+      }
+
+      // Find objectTypes
+      const types = this.findElements(parsed, 'type');
+      defaultScope.objectTypes = types.map(t => {
+        const typeObj = t as Record<string, unknown>;
+        return {
+          name: getAttribute(typeObj, 'name') || '',
+          isDefault: getAttribute(typeObj, 'isDefault') === 'true',
+          isSelected: getAttribute(typeObj, 'isSelected') === 'true',
+        };
+      });
+
+      // Find payload
+      const payloads = this.findElements(parsed, 'payload');
+      if (payloads.length > 0) {
+        defaultScope.payload = String(payloads[0]) || '';
+      }
+
+    } catch (error) {
+      this.logger.warn(`Failed to parse where used scope response: ${error}`);
+    }
+
+    return defaultScope;
+  }
+
+  /**
+   * Build XML for Where Used query request with scope data
+   * Based on SAP ADT HTTP trace
+   */
+  private buildWhereUsedQueryRequestXML(scopeData: WhereUsedScopeData): string {
+    // Build objectTypes array
+    const objectTypes = scopeData.objectTypes.map(t => ({
+      '@_isDefault': t.isDefault,
+      '@_isSelected': t.isSelected,
+      '@_name': t.name,
+    }));
+
     const obj = {
       'usagereferences:usageReferenceRequest': {
-        '@_xmlns:usagereferences': 'http://www.sap.com/adt/repository/informationsystem/usageReferences',
-        '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
-        'usagereferences:objectReference': {
-          '@_adtcore:uri': args.objectUri,
-          '@_adtcore:name': args.objectName.toUpperCase(),
-          '@_adtcore:type': args.objectType,
+        '@_xmlns:usagereferences': 'http://www.sap.com/adt/ris/usageReferences',
+        'usagereferences:affectedObjects': {},
+        'usagereferences:scope': {
+          '@_localUsage': 'false',
+          'usagereferences:objectIdentifier': {
+            '@_displayName': scopeData.objectIdentifier.displayName,
+            '@_globalType': scopeData.objectIdentifier.globalType,
+          },
+          'usagereferences:grade': {
+            '@_definitions': scopeData.grade.definitions,
+            '@_elements': scopeData.grade.elements,
+            '@_indirectReferences': scopeData.grade.indirectReferences,
+          },
+          'usagereferences:objectTypes': {
+            'usagereferences:type': objectTypes.length > 0 ? objectTypes : [
+              // Default types if none provided
+              { '@_isDefault': true, '@_isSelected': true, '@_name': 'CLAS/OC' },
+              { '@_isDefault': true, '@_isSelected': true, '@_name': 'INTF/OI' },
+              { '@_isDefault': true, '@_isSelected': true, '@_name': 'PROG/P' },
+              { '@_isDefault': true, '@_isSelected': true, '@_name': 'FUGR/F' },
+              { '@_isDefault': true, '@_isSelected': true, '@_name': 'FUNC/F' },
+            ],
+          },
+          ...(scopeData.payload && { 'usagereferences:payload': scopeData.payload }),
         },
       },
     };

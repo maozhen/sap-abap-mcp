@@ -758,7 +758,16 @@ ${entriesXml}
 
   /**
    * Check syntax of ADT object
-   * SAP ADT uses POST to /checkruns endpoint with object reference in request body
+   * 
+   * SAP ADT uses POST to /activation endpoint with preauditRequested=true for syntax checking.
+   * This performs a "preaudit" which checks syntax without actually activating the object.
+   * 
+   * Request format:
+   *   POST /sap/bc/adt/activation?method=activate&preauditRequested=true
+   *   Body: <adtcore:objectReferences><adtcore:objectReference adtcore:uri="..." adtcore:name="..."/></adtcore:objectReferences>
+   * 
+   * Response format:
+   *   <chkl:messages><msg objDescr="..." type="E" line="1" href="...#start=line,col;end=line,col"><shortText><txt>Error text</txt></shortText></msg></chkl:messages>
    */
   async checkSyntax(objectUri: string): Promise<{
     hasErrors: boolean;
@@ -767,20 +776,30 @@ ${entriesXml}
     const normalizedUri = this.normalizeUri(objectUri);
     this.logger.adtOperation('checkSyntax', undefined, normalizedUri);
 
-    // Build the check run request XML
-    // SAP ADT requires the full URI with /sap/bc/adt prefix for URI mapping
+    // Build the activation request XML with preauditRequested=true
+    // SAP ADT requires the full URI with /sap/bc/adt prefix in the objectReference
     const fullUri = `/sap/bc/adt${normalizedUri}`;
+    const objectName = this.extractNameFromUri(normalizedUri).toUpperCase();
+    
     const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
-<chkrun:checkObjectList xmlns:chkrun="http://www.sap.com/adt/checkrun" xmlns:adtcore="http://www.sap.com/adt/core">
-  <chkrun:checkObject adtcore:uri="${fullUri}" chkrun:version="active"/>
-</chkrun:checkObjectList>`;
+<adtcore:objectReferences xmlns:adtcore="http://www.sap.com/adt/core">
+  <adtcore:objectReference adtcore:uri="${fullUri}" adtcore:name="${objectName}"/>
+</adtcore:objectReferences>`;
 
-    const response = await this.post('/checkruns', requestBody, {
+    this.logger.debug(`Check syntax request body:\n${requestBody}`);
+
+    const response = await this.post('/activation', requestBody, {
       headers: {
-        'Content-Type': 'application/vnd.sap.adt.checkobjects+xml',
-        'Accept': 'application/vnd.sap.adt.checkmessages+xml'
+        'Content-Type': 'application/xml',
+        'Accept': 'application/xml, */*'
+      },
+      params: {
+        'method': 'activate',
+        'preauditRequested': 'true'
       }
     });
+
+    this.logger.debug(`Check syntax response:\n${response.raw}`);
 
     const messages: Array<{ line?: number; column?: number; type: string; message: string }> = [];
     let hasErrors = false;
@@ -788,52 +807,84 @@ ${entriesXml}
     if (response.raw) {
       const parsed = parseXML(response.raw);
       
-      // Parse check messages from response
-      const messageElements = this.findElements(parsed, 'checkMessage');
+      // Parse messages from <chkl:messages> response
+      // The response format is: <msg type="E" line="295" href="...#start=295,2;end=295,10"><shortText><txt>Error text</txt></shortText></msg>
+      const messageElements = this.findElements(parsed, 'msg');
+      
       for (const msg of messageElements) {
         const msgRecord = msg as Record<string, unknown>;
-        const severity = String(msgRecord['@_chkrun:type'] || msgRecord['@_type'] || 'I');
-        const msgType = severity === 'E' ? 'error' : severity === 'W' ? 'warning' : 'info';
+        
+        // Get message type: E=error, W=warning, I=info
+        const msgType = String(msgRecord['@_type'] || 'I');
+        const type = msgType === 'E' ? 'error' : msgType === 'W' ? 'warning' : 'info';
+        
+        // Get line number from line attribute or parse from href
+        let line: number | undefined;
+        let column: number | undefined;
+        
+        // First try the line attribute
+        if (msgRecord['@_line']) {
+          line = parseInt(String(msgRecord['@_line']), 10);
+        }
+        
+        // Also try to parse from href which contains more precise location
+        // Format: href="...#start=295,2;end=295,10"
+        const href = String(msgRecord['@_href'] || '');
+        const hrefMatch = href.match(/#start=(\d+),(\d+)/);
+        if (hrefMatch) {
+          line = parseInt(hrefMatch[1], 10);
+          column = parseInt(hrefMatch[2], 10);
+        }
+        
+        // Get message text from shortText/txt element
+        let messageText = '';
+        const shortText = msgRecord['shortText'] as Record<string, unknown> | undefined;
+        if (shortText) {
+          const txt = shortText['txt'];
+          if (txt && typeof txt === 'object' && '#text' in (txt as object)) {
+            messageText = String((txt as Record<string, unknown>)['#text']);
+          } else if (typeof txt === 'string') {
+            messageText = txt;
+          } else {
+            messageText = String(txt || '');
+          }
+        }
+        
+        // Fallback: try direct text content or objDescr attribute
+        if (!messageText) {
+          messageText = String(msgRecord['#text'] || msgRecord['@_objDescr'] || msg);
+        }
         
         messages.push({
-          line: msgRecord['@_chkrun:line'] || msgRecord['@_line'] 
-            ? parseInt(String(msgRecord['@_chkrun:line'] || msgRecord['@_line']), 10) 
-            : undefined,
-          column: msgRecord['@_chkrun:column'] || msgRecord['@_column']
-            ? parseInt(String(msgRecord['@_chkrun:column'] || msgRecord['@_column']), 10) 
-            : undefined,
-          type: msgType,
-          message: String(msgRecord['@_chkrun:shortText'] || msgRecord['@_shortText'] || 
-                         msgRecord['#text'] || msgRecord['message'] || msg)
+          line,
+          column,
+          type,
+          message: messageText
         });
         
-        if (msgType === 'error') {
+        if (type === 'error') {
           hasErrors = true;
         }
       }
 
-      // Also check for error elements (legacy format)
-      const errorElements = this.findElements(parsed, 'error');
-      for (const err of errorElements) {
-        const errRecord = err as Record<string, unknown>;
-        messages.push({
-          line: errRecord['@_line'] ? parseInt(String(errRecord['@_line']), 10) : undefined,
-          column: errRecord['@_column'] ? parseInt(String(errRecord['@_column']), 10) : undefined,
-          type: 'error',
-          message: String(errRecord['#text'] || errRecord['message'] || err)
-        });
-        hasErrors = true;
-      }
-
-      const warningElements = this.findElements(parsed, 'warning');
-      for (const warn of warningElements) {
-        const warnRecord = warn as Record<string, unknown>;
-        messages.push({
-          line: warnRecord['@_line'] ? parseInt(String(warnRecord['@_line']), 10) : undefined,
-          column: warnRecord['@_column'] ? parseInt(String(warnRecord['@_column']), 10) : undefined,
-          type: 'warning',
-          message: String(warnRecord['#text'] || warnRecord['message'] || warn)
-        });
+      // Also check for inactiveObjects to see if there are errors preventing activation
+      const inactiveObjects = this.findElements(parsed, 'inactiveObject');
+      if (inactiveObjects.length > 0 && messages.length === 0) {
+        // If there are inactive objects but no explicit error messages,
+        // check if there are any link entries which indicate errors
+        const linkEntries = this.findElements(parsed, 'link');
+        for (const link of linkEntries) {
+          const linkRecord = link as Record<string, unknown>;
+          const rel = String(linkRecord['@_rel'] || '');
+          if (rel.includes('error') || rel.includes('message')) {
+            hasErrors = true;
+            messages.push({
+              type: 'error',
+              message: 'Object has syntax errors and cannot be activated'
+            });
+            break;
+          }
+        }
       }
     }
 

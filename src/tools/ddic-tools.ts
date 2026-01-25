@@ -178,24 +178,45 @@ export class DDICToolHandler {
 
   /**
    * Create a new structure
-   * POST to collection URL: /ddic/structures (not /ddic/structures/{name})
+   * Uses two-step approach like Database Table:
+   * 1. POST to create basic structure (metadata only)
+   * 2. Lock -> updateObjectSource -> unlock to set DDL source with components
    */
   async createStructure(args: CreateStructureInput): Promise<ToolResponse<Structure>> {
     this.logger.info(`Creating structure: ${args.name}`);
-    // POST to collection URL, not object URL
-    const uri = DDIC_URI_PREFIXES.STRU;
+    const collectionUri = DDIC_URI_PREFIXES.STRU;
+    const objectUri = `${collectionUri}/${args.name.toLowerCase()}`;
+    const sourceUri = `${objectUri}/source/main`;
 
     try {
-      const requestXml = this.buildStructureXML(args);
-      // SAP ADT structures use specific Content-Type
-      // Try application/vnd.sap.adt.structures.v2+xml for structure metadata
-      const response = await this.adtClient.post(uri, requestXml, {
-        headers: { 'Content-Type': 'application/vnd.sap.adt.structures.v2+xml' },
+      // Step 1: Create basic structure (metadata only, no components)
+      const requestXml = this.buildStructureMetadataXML(args);
+      this.logger.debug(`Structure creation XML:\n${requestXml}`);
+      
+      // Use application/* Content-Type as per reference library (abap-adt-api)
+      // Specific Content-Types like structures.v2+xml cause HTTP 400 errors
+      await this.adtClient.post(collectionUri, requestXml, {
+        headers: { 'Content-Type': 'application/*' },
         params: args.transportRequest ? { corrNr: args.transportRequest } : undefined,
       });
+      this.logger.info(`Structure ${args.name} basic structure created`);
 
-      const structure = this.parseStructureResponse(response.raw || '', args);
-      this.logger.info(`Structure ${args.name} created successfully`);
+      // Step 2: Update source with complete DDL (including components)
+      const ddlSource = this.buildStructureDDLSource(args);
+      this.logger.debug(`Structure DDL source:\n${ddlSource}`);
+
+      // Lock, update source, unlock
+      const lock = await this.adtClient.lockObject(objectUri);
+      this.logger.debug(`Structure ${args.name} locked with handle: ${lock.lockHandle}`);
+      
+      await this.adtClient.updateObjectSource(sourceUri, ddlSource, lock.lockHandle);
+      this.logger.info(`Structure ${args.name} DDL source updated`);
+      
+      await this.adtClient.unlockObject(objectUri, lock.lockHandle);
+      this.logger.debug(`Structure ${args.name} unlocked`);
+
+      const structure = this.parseStructureResponse('', args);
+      this.logger.info(`Structure ${args.name} created successfully with ${args.components.length} components`);
       return { success: true, data: structure };
     } catch (error) {
       this.logger.error(`Failed to create structure ${args.name}`, error);
@@ -205,24 +226,30 @@ export class DDICToolHandler {
 
   /**
    * Create a new table type
-   * POST to collection URL: /ddic/tabletypes (not /ddic/tabletypes/{name})
+   * Single-step approach: POST to create table type with all metadata
+   * Unlike Database Table and Structure, Table Type doesn't support source/main endpoint
+   * All information (lineType, accessMode, keyKind) is included in the metadata XML
    */
   async createTableType(args: CreateTableTypeInput): Promise<ToolResponse<TableType>> {
     this.logger.info(`Creating table type: ${args.name}`);
-    // POST to collection URL, not object URL
-    const uri = DDIC_URI_PREFIXES.TTYP;
+    const collectionUri = DDIC_URI_PREFIXES.TTYP;
 
     try {
-      const requestXml = this.buildTableTypeXML(args);
-      // SAP ADT table types use specific Content-Type
-      // Try application/vnd.sap.adt.tabletypes.v2+xml for table type metadata
-      const response = await this.adtClient.post(uri, requestXml, {
-        headers: { 'Content-Type': 'application/vnd.sap.adt.tabletypes.v2+xml' },
+      // Create table type with all metadata in one step
+      // Table Types don't support /source/main endpoint (returns 404)
+      // All properties are included in the metadata XML
+      const requestXml = this.buildTableTypeMetadataXML(args);
+      this.logger.debug(`Table type creation XML:\n${requestXml}`);
+      
+      // Use application/* Content-Type as per reference library (abap-adt-api)
+      // Specific Content-Types like tabletypes+xml cause HTTP 415 errors
+      await this.adtClient.post(collectionUri, requestXml, {
+        headers: { 'Content-Type': 'application/*' },
         params: args.transportRequest ? { corrNr: args.transportRequest } : undefined,
       });
-
-      const tableType = this.parseTableTypeResponse(response.raw || '', args);
       this.logger.info(`Table type ${args.name} created successfully`);
+
+      const tableType = this.parseTableTypeResponse('', args);
       return { success: true, data: tableType };
     } catch (error) {
       this.logger.error(`Failed to create table type ${args.name}`, error);
@@ -529,9 +556,75 @@ ${fieldDefinitions}
     return buildXML(obj);
   }
 
+  /**
+   * Build structure metadata XML (Step 1: Create basic structure without source)
+   * SAP ADT requires creating the object first, then updating its source
+   * Uses blueSource element with http://www.sap.com/wbobj/blue namespace (same as Database Table)
+   * Error message confirmed: "System expected element '{http://www.sap.com/wbobj/blue}blueSource'"
+   */
+  private buildStructureMetadataXML(args: CreateStructureInput): string {
+    // SAP ADT expects namespace: http://www.sap.com/wbobj/blue with element 'blueSource'
+    // Same format as Database Table (TABL/DT)
+    const obj = {
+      'blueSource': {
+        '@_xmlns': 'http://www.sap.com/wbobj/blue',
+        '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
+        '@_adtcore:description': args.description,
+        '@_adtcore:language': 'EN',
+        '@_adtcore:name': args.name.toUpperCase(),
+        '@_adtcore:type': 'STRU/I',
+        '@_adtcore:masterLanguage': 'EN',
+        'adtcore:packageRef': {
+          '@_adtcore:name': args.packageName,
+        },
+        // No 'source' element - will be set in Step 2 via updateObjectSource
+      },
+    };
+    return buildXML(obj);
+  }
+
+  /**
+   * Build structure DDL source string (Step 2: Update source with complete DDL)
+   * This is the actual DDL definition including all components
+   */
+  private buildStructureDDLSource(args: CreateStructureInput): string {
+    const componentDefinitions = args.components.map(comp => {
+      if (comp.dataElement) {
+        return `  ${comp.name.toLowerCase()} : ${comp.dataElement.toLowerCase()};`;
+      } else {
+        // Use ABAP data type syntax
+        const typeMapping: Record<string, string> = {
+          'CHAR': `abap.char(${comp.length || 1})`,
+          'NUMC': `abap.numc(${comp.length || 1})`,
+          'DEC': `abap.dec(${comp.length || 13},${comp.decimals || 0})`,
+          'INT4': 'abap.int4',
+          'DATS': 'abap.dats',
+          'TIMS': 'abap.tims',
+          'STRING': 'abap.string',
+          'CLNT': 'abap.clnt',
+        };
+        const abapType = typeMapping[comp.dataType?.toUpperCase() || 'CHAR'] || `abap.char(${comp.length || 1})`;
+        return `  ${comp.name.toLowerCase()} : ${abapType};`;
+      }
+    }).join('\n');
+
+    // Include structures if specified
+    const includeStatements = args.includeStructures?.map(s => `  include ${s.toLowerCase()};`).join('\n') || '';
+
+    return `@EndUserText.label : '${args.description}'
+@AbapCatalog.enhancement.category : #NOT_EXTENSIBLE
+define structure ${args.name.toLowerCase()} {
+${includeStatements ? includeStatements + '\n' : ''}${componentDefinitions}
+}`;
+  }
+
+  /**
+   * Build complete structure XML with inline source (legacy method, kept for reference)
+   * Note: SAP ADT may not accept inline source during creation
+   */
   private buildStructureXML(args: CreateStructureInput): string {
     // SAP ADT expects namespace: http://www.sap.com/adt/ddic/structures
-    // Use structure-specific XML format for classic DDIC structures
+    // Use structure-specific XML format for classic DDIC structures (legacy)
     const componentsXml = args.components.map(comp => {
       if (comp.dataElement) {
         return {
@@ -575,6 +668,103 @@ ${fieldDefinitions}
     return buildXML(obj);
   }
 
+  /**
+   * Build table type XML for creation
+   * SAP ADT expects tableType element with http://www.sap.com/dictionary/tabletype namespace
+   * Error message indicated: System expected element '{http://www.sap.com/dictionary/tabletype}tableType'
+   */
+  private buildTableTypeMetadataXML(args: CreateTableTypeInput): string {
+    // SAP ADT expects namespace: http://www.sap.com/dictionary/tabletype with element 'tableType'
+    // Based on error: "System expected element '{http://www.sap.com/dictionary/tabletype}tableType'"
+    
+    // Map access mode to SAP internal codes
+    const accessModeMapping: Record<string, string> = {
+      'standard': 'T',  // Standard table
+      'sorted': 'S',    // Sorted table
+      'hashed': 'H',    // Hashed table
+      'index': 'I',     // Index table
+    };
+    
+    // Map key kind to SAP internal codes
+    const keyKindMapping: Record<string, string> = {
+      'standard': 'D',  // Default key
+      'empty': 'E',     // Empty key
+      'components': 'K', // Key components specified
+    };
+    
+    // Map line type kind to SAP internal codes
+    const lineTypeKindMapping: Record<string, string> = {
+      'structure': 'S',
+      'dataElement': 'D',
+      'predefined': 'P',
+    };
+    
+    const obj = {
+      'tableType': {
+        '@_xmlns': 'http://www.sap.com/dictionary/tabletype',
+        '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
+        '@_adtcore:description': args.description,
+        '@_adtcore:language': 'EN',
+        '@_adtcore:name': args.name.toUpperCase(),
+        '@_adtcore:type': 'TTYP/DA',
+        '@_adtcore:masterLanguage': 'EN',
+        '@_accessMode': accessModeMapping[args.accessMode] || 'T',
+        '@_keyKind': keyKindMapping[args.keyDefinition || 'standard'] || 'D',
+        '@_keyIsUnique': args.primaryKeyType === 'unique' ? 'true' : 'false',
+        'adtcore:packageRef': {
+          '@_adtcore:name': args.packageName,
+        },
+        'lineType': {
+          '@_name': args.lineType.toUpperCase(),
+          '@_kind': lineTypeKindMapping[args.lineTypeKind] || 'S',
+        },
+        ...(args.keyDefinition === 'components' && args.keyComponents && args.keyComponents.length > 0 && {
+          'keyComponents': {
+            'keyComponent': args.keyComponents.map(k => ({ '@_name': k.toUpperCase() })),
+          },
+        }),
+      },
+    };
+    return buildXML(obj);
+  }
+
+  /**
+   * Build table type DDL source string (Step 2: Update source with complete DDL)
+   * This is the actual DDL definition including line type and access mode
+   */
+  private buildTableTypeDDLSource(args: CreateTableTypeInput): string {
+    // Map access mode to DDL keyword
+    const accessModeKeyword: Record<string, string> = {
+      'standard': 'standard',
+      'sorted': 'sorted',
+      'hashed': 'hashed',
+      'index': 'index',
+    };
+
+    const accessMode = accessModeKeyword[args.accessMode.toLowerCase()] || 'standard';
+    
+    // Build key definition if specified
+    let keyClause = '';
+    if (args.keyDefinition === 'empty') {
+      keyClause = ' with empty key';
+    } else if (args.keyDefinition === 'components' && args.keyComponents && args.keyComponents.length > 0) {
+      const keyFields = args.keyComponents.map(k => k.toLowerCase()).join(', ');
+      const uniqueKeyword = args.primaryKeyType === 'unique' ? 'unique ' : '';
+      keyClause = ` with ${uniqueKeyword}key ( ${keyFields} )`;
+    } else {
+      // Default key definition (standard table key)
+      keyClause = ' with default key';
+    }
+
+    return `@EndUserText.label : '${args.description}'
+@AbapCatalog.enhancement.category : #NOT_EXTENSIBLE
+define type ${args.name.toLowerCase()} as ${accessMode} table of ${args.lineType.toLowerCase()}${keyClause}`;
+  }
+
+  /**
+   * Build complete table type XML with inline source (legacy method, kept for reference)
+   * Note: SAP ADT may not accept inline source during creation
+   */
   private buildTableTypeXML(args: CreateTableTypeInput): string {
     // SAP ADT expects namespace: http://www.sap.com/adt/ddic/tabletypes
     // Use table type-specific XML format
