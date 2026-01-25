@@ -133,6 +133,14 @@ export interface WhereUsedInput {
   objectType: ADTObjectType;
 }
 
+export interface DeleteObjectInput {
+  name: string;
+  objectType: 'CLAS' | 'INTF' | 'PROG' | 'FUGR' | 'FUNC';
+  /** Required for FUNC type - the function group containing the function module */
+  functionGroup?: string;
+  transportRequest?: string;
+}
+
 /**
  * Where Used scope data structure
  * Contains configuration returned from the scope API call
@@ -262,26 +270,126 @@ export class ProgramToolHandler {
   /**
    * Create a new function module
    * POST to collection URL: /functions/groups/{group}/fmodules
+   * 
+   * SAP ADT requires a three-step process (based on ADT HTTP trace):
+   * 1. POST to create the function module shell (no parameters in XML)
+   * 2. GET source code to confirm creation (contains template text)
+   * 3. PUT to /source/main to replace template text with parameter signature
+   * 
+   * Initial source code format after creation:
+   * FUNCTION <function name>
+   *  " You can use the template 'functionModuleParameter' to add here the signature!
+   * .
+   * 
+   * ENDFUNCTION.
    */
   async createFunctionModule(args: CreateFunctionModuleInput): Promise<ToolResponse<FunctionModule>> {
     this.logger.info(`Creating function module: ${args.name}`);
     // POST to the fmodules collection within the function group
     const uri = `/functions/groups/${args.functionGroup.toLowerCase()}/fmodules`;
 
+    let lockHandle: LockHandle | undefined;
+    const fmUri = `/functions/groups/${args.functionGroup.toLowerCase()}/fmodules/${args.name.toLowerCase()}`;
+    const sourceUri = `${fmUri}/source/main`;
+
     try {
-      const requestXml = this.buildFunctionModuleXML(args);
+      // Step 1: POST to create the function module shell (no parameters in XML)
+      // ADT only expects basic info: name, description, containerRef
+      const requestXml = this.buildFunctionModuleShellXML(args);
+      this.logger.debug(`Creating function module shell with XML:\n${requestXml}`);
+      
       const response = await this.adtClient.post(uri, requestXml, {
-        headers: { 'Content-Type': 'application/vnd.sap.adt.functions.v3+xml' },
+        headers: { 'Content-Type': 'application/vnd.sap.adt.functions.fmodules+xml' },
         params: args.transportRequest ? { corrNr: args.transportRequest } : undefined,
       });
+      this.logger.info(`Function module ${args.name} shell created`);
+
+      // Check if we have parameters to set
+      const hasParameters = (args.importParameters && args.importParameters.length > 0) ||
+                           (args.exportParameters && args.exportParameters.length > 0) ||
+                           (args.changingParameters && args.changingParameters.length > 0) ||
+                           (args.tableParameters && args.tableParameters.length > 0) ||
+                           (args.exceptions && args.exceptions.length > 0);
+
+      if (hasParameters || args.sourceCode) {
+        // Step 2: GET source code to confirm creation and get initial template
+        this.logger.info(`Function module ${args.name} created, now getting initial source code`);
+        const initialSource = await this.adtClient.getObjectSource(sourceUri);
+        this.logger.debug(`Initial source code:\n${initialSource}`);
+
+        // Step 3: Replace template text with parameter signature and update
+        this.logger.info(`Updating source code with parameter signature`);
+
+        // Lock the object
+        lockHandle = await this.adtClient.lockObject(fmUri);
+        this.logger.debug(`Function module locked: ${lockHandle.lockHandle}`);
+
+        // Build new source code with parameter signature
+        const newSourceCode = this.buildFunctionModuleSourceWithSignature(args, initialSource);
+        this.logger.debug(`New source code with signature:\n${newSourceCode}`);
+
+        // Update source code
+        await this.adtClient.updateObjectSource(sourceUri, newSourceCode, lockHandle.lockHandle);
+        this.logger.info(`Function module ${args.name} source code updated with parameters`);
+
+        // Unlock the object
+        await this.adtClient.unlockObject(fmUri, lockHandle.lockHandle);
+        lockHandle = undefined;
+      } else {
+        this.logger.info(`Function module ${args.name} created (no parameters to set)`);
+      }
 
       const functionModule = this.parseFunctionModuleResponse(response.raw || '', args);
       this.logger.info(`Function module ${args.name} created successfully`);
       return { success: true, data: functionModule };
     } catch (error) {
+      // Ensure unlock on error
+      if (lockHandle) {
+        try {
+          await this.adtClient.unlockObject(fmUri, lockHandle.lockHandle);
+        } catch (unlockError) {
+          this.logger.warn(`Failed to unlock function module after error: ${unlockError}`);
+        }
+      }
       this.logger.error(`Failed to create function module ${args.name}`, error);
       return this.createErrorResponse('CREATE_FUNC_FAILED', `Failed to create function module: ${error}`, error);
     }
+  }
+
+  /**
+   * Build function module source code text
+   * 
+   * IMPORTANT: SAP ADT does NOT allow manual writing of parameter signature blocks
+   * (the *" comment blocks). SAP generates these automatically based on the XML
+   * metadata when the function module is created/activated.
+   * 
+   * Attempting to write parameter blocks results in error FUNC_ADT028:
+   * "Parameter comment blocks are not allowed"
+   * 
+   * This method only generates:
+   * - FUNCTION statement
+   * - User-provided implementation code (if any)
+   * - ENDFUNCTION statement
+   */
+  private buildFunctionModuleSourceCode(args: CreateFunctionModuleInput): string {
+    const lines: string[] = [];
+    
+    // Function header
+    lines.push(`FUNCTION ${args.name.toUpperCase()}.`);
+    
+    // Add user-provided source code if any
+    if (args.sourceCode) {
+      lines.push('');
+      lines.push(args.sourceCode);
+    }
+    
+    // Ensure there's a blank line before ENDFUNCTION for readability
+    lines.push('');
+    
+    // Function end
+    lines.push('ENDFUNCTION.');
+    
+    return lines.join('\n');
   }
 
   /**
@@ -428,6 +536,82 @@ export class ProgramToolHandler {
     } catch (error) {
       this.logger.error(`Failed to activate objects`, error);
       return this.createErrorResponse('ACTIVATION_FAILED', `Failed to activate objects: ${error}`, error);
+    }
+  }
+
+  // ==========================================================================
+  // Delete Operations
+  // ==========================================================================
+
+  /**
+   * Delete an ABAP object (class, interface, program, function group, function module)
+   * Uses the ADT delete flow: lock -> DELETE -> unlock (on failure)
+   * 
+   * For function modules (FUNC), the functionGroup parameter is required.
+   * The URI format is: /functions/groups/{group}/fmodules/{name}
+   */
+  async deleteObject(args: DeleteObjectInput): Promise<ToolResponse<{ deleted: boolean; name: string; objectType: string }>> {
+    this.logger.info(`Deleting object: ${args.name} (${args.objectType})`);
+
+    // Special handling for function modules - requires function group
+    if (args.objectType === 'FUNC') {
+      if (!args.functionGroup) {
+        this.logger.error('Function group is required for deleting function modules');
+        return this.createErrorResponse(
+          'MISSING_FUNCTION_GROUP',
+          'Function group is required for deleting function modules (FUNC type)'
+        );
+      }
+
+      // Build function module URI: /functions/groups/{group}/fmodules/{name}
+      const uri = `/functions/groups/${args.functionGroup.toLowerCase()}/fmodules/${args.name.toLowerCase()}`;
+
+      try {
+        await this.adtClient.deleteObject(uri, args.transportRequest);
+        this.logger.info(`Function module ${args.name} deleted successfully`);
+        return {
+          success: true,
+          data: {
+            deleted: true,
+            name: args.name.toUpperCase(),
+            objectType: args.objectType,
+          },
+        };
+      } catch (error) {
+        this.logger.error(`Failed to delete function module ${args.name}`, error);
+        return this.createErrorResponse('DELETE_OBJECT_FAILED', `Failed to delete function module: ${error}`, error);
+      }
+    }
+
+    // Get URI prefix for other object types
+    const uriPrefix = PROGRAM_URI_PREFIXES[args.objectType];
+    if (!uriPrefix) {
+      this.logger.error(`Invalid object type: ${args.objectType}`);
+      return this.createErrorResponse(
+        'INVALID_OBJECT_TYPE',
+        `Invalid object type: ${args.objectType}. Supported types: CLAS, INTF, PROG, FUGR, FUNC`
+      );
+    }
+
+    // Build the object URI
+    const uri = `${uriPrefix}/${args.name.toLowerCase()}`;
+
+    try {
+      // Use ADT client's deleteObject method (handles lock/delete/unlock)
+      await this.adtClient.deleteObject(uri, args.transportRequest);
+
+      this.logger.info(`Object ${args.name} deleted successfully`);
+      return {
+        success: true,
+        data: {
+          deleted: true,
+          name: args.name.toUpperCase(),
+          objectType: args.objectType,
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Failed to delete object ${args.name}`, error);
+      return this.createErrorResponse('DELETE_OBJECT_FAILED', `Failed to delete object: ${error}`, error);
     }
   }
 
@@ -643,6 +827,162 @@ export class ProgramToolHandler {
     return buildXML(obj);
   }
 
+  /**
+   * Build XML for function module shell creation (Step 1)
+   * Based on ADT HTTP trace - only includes basic info: name, description, containerRef
+   * NO parameters should be included in this XML
+   * 
+   * Example from ADT trace:
+   * <?xml version="1.0" encoding="UTF-8"?>
+   * <fmodule:abapFunctionModule xmlns:adtcore="http://www.sap.com/adt/core" 
+   *   xmlns:fmodule="http://www.sap.com/adt/functions/fmodules" 
+   *   adtcore:description="ZMCPTESET" adtcore:name="ZMCPTESET" adtcore:type="FUGR/FF">
+   *   <adtcore:containerRef adtcore:name="ZTEST_MCP_FG" adtcore:type="FUGR/F" 
+   *     adtcore:uri="/sap/bc/adt/functions/groups/ztest_mcp_fg"/>
+   * </fmodule:abapFunctionModule>
+   */
+  private buildFunctionModuleShellXML(args: CreateFunctionModuleInput): string {
+    const obj = {
+      'fmodule:abapFunctionModule': {
+        '@_xmlns:fmodule': 'http://www.sap.com/adt/functions/fmodules',
+        '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
+        '@_adtcore:description': args.description,
+        '@_adtcore:name': args.name.toUpperCase(),
+        '@_adtcore:type': 'FUGR/FF',
+        'adtcore:containerRef': {
+          '@_adtcore:name': args.functionGroup.toUpperCase(),
+          '@_adtcore:type': 'FUGR/F',
+          '@_adtcore:uri': `/sap/bc/adt/functions/groups/${args.functionGroup.toLowerCase()}`,
+        },
+      },
+    };
+    return buildXML(obj);
+  }
+
+  /**
+   * Build function module source code with parameter signature (Step 3)
+   * 
+   * Generates source code in correct ABAP format:
+   * FUNCTION Z_TEST_FM_PARAMS
+   *   IMPORTING
+   *     VALUE(IV_INPUT) TYPE STRING
+   *   EXPORTING
+   *     VALUE(EV_OUTPUT) TYPE STRING
+   *   TABLES
+   *     ET_RESULT STRUCTURE STRING_TABLE
+   *   EXCEPTIONS
+   *     INVALID_INPUT.
+   * 
+   * 
+   * 
+   * ENDFUNCTION.
+   * 
+   * NOTE: The signature ends with a period (.) directly after the last parameter/exception
+   * 
+   * @param args Function module creation input with parameters
+   * @param initialSource Initial source code from SAP (ignored - we generate fresh)
+   * @returns New source code with parameter signature
+   */
+  private buildFunctionModuleSourceWithSignature(args: CreateFunctionModuleInput, initialSource: string): string {
+    // Build parameter signature lines
+    const signatureLines: string[] = [];
+
+    // IMPORTING parameters
+    if (args.importParameters && args.importParameters.length > 0) {
+      signatureLines.push('  IMPORTING');
+      for (const param of args.importParameters) {
+        let line = `    VALUE(${param.name.toUpperCase()}) TYPE ${param.typeName.toUpperCase()}`;
+        if (param.defaultValue) {
+          line += ` DEFAULT ${param.defaultValue}`;
+        }
+        if (param.isOptional && !param.defaultValue) {
+          line += ' OPTIONAL';
+        }
+        signatureLines.push(line);
+      }
+    }
+
+    // EXPORTING parameters
+    if (args.exportParameters && args.exportParameters.length > 0) {
+      signatureLines.push('  EXPORTING');
+      for (const param of args.exportParameters) {
+        signatureLines.push(`    VALUE(${param.name.toUpperCase()}) TYPE ${param.typeName.toUpperCase()}`);
+      }
+    }
+
+    // CHANGING parameters
+    if (args.changingParameters && args.changingParameters.length > 0) {
+      signatureLines.push('  CHANGING');
+      for (const param of args.changingParameters) {
+        let line = `    VALUE(${param.name.toUpperCase()}) TYPE ${param.typeName.toUpperCase()}`;
+        if (param.isOptional) {
+          line += ' OPTIONAL';
+        }
+        signatureLines.push(line);
+      }
+    }
+
+    // TABLES parameters
+    // Format: ET_RESULT TYPE STRING_TABLE (or LIKE <structure>)
+    if (args.tableParameters && args.tableParameters.length > 0) {
+      signatureLines.push('  TABLES');
+      for (const param of args.tableParameters) {
+        let line = `    ${param.name.toUpperCase()} TYPE ${param.typeName.toUpperCase()}`;
+        if (param.isOptional) {
+          line += ' OPTIONAL';
+        }
+        signatureLines.push(line);
+      }
+    }
+
+    // EXCEPTIONS
+    if (args.exceptions && args.exceptions.length > 0) {
+      signatureLines.push('  EXCEPTIONS');
+      for (const exc of args.exceptions) {
+        if (exc && exc.name) {
+          signatureLines.push(`    ${exc.name.toUpperCase()}`);
+        }
+      }
+    }
+
+    // Build the new source code
+    // Format: FUNCTION name\n  signature.\n\n\nENDFUNCTION.
+    const lines: string[] = [];
+    lines.push(`FUNCTION ${args.name.toUpperCase()}`);
+    
+    // Add parameter signature if any, with period at the end
+    if (signatureLines.length > 0) {
+      // Add all signature lines
+      for (let i = 0; i < signatureLines.length; i++) {
+        if (i === signatureLines.length - 1) {
+          // Last line gets a period
+          lines.push(signatureLines[i] + '.');
+        } else {
+          lines.push(signatureLines[i]);
+        }
+      }
+    } else {
+      // No parameters - just add period after FUNCTION name
+      lines[0] = lines[0] + '.';
+    }
+
+    // Add user-provided source code if any
+    if (args.sourceCode) {
+      lines.push('');
+      lines.push(args.sourceCode);
+    }
+
+    // Add blank lines and ENDFUNCTION (SAP standard format)
+    lines.push('');
+    lines.push('');
+    lines.push('');
+    lines.push('');
+    lines.push('');
+    lines.push('ENDFUNCTION.');
+
+    return lines.join('\n');
+  }
+
   private buildFunctionModuleXML(args: CreateFunctionModuleInput): string {
     // SAP ADT expects namespace 'fmodules' for function modules
     // The namespace URI is http://www.sap.com/adt/functions/fmodules
@@ -674,7 +1014,7 @@ export class ProgramToolHandler {
       ...(p.description && { '@_fmodules:description': p.description }),
     })) || [];
 
-    const exceptions = args.exceptions?.map(e => ({
+    const exceptions = args.exceptions?.filter(e => e && e.name).map(e => ({
       '@_fmodules:name': e.name.toUpperCase(),
       ...(e.description && { '@_fmodules:description': e.description }),
     })) || [];

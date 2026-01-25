@@ -32,6 +32,7 @@ import {
   CreateTableTypeInput,
   GetDDICObjectInput,
   ActivateDDICObjectInput,
+  DeleteDDICObjectInput,
   // Program types
   CreateInterfaceInput,
   CreateFunctionGroupInput,
@@ -44,6 +45,7 @@ import {
   SearchObjectsInput,
   WhereUsedInput,
   GetObjectMetadataInput,
+  DeleteObjectInput,
   // CDS types
   CreateServiceDefinitionInput,
   CreateServiceBindingInput,
@@ -366,7 +368,7 @@ export class SAPABAPMCPServer {
           required: ['objectType', 'objectName'],
         },
       },
-      handler: (args) => this.ddicHandler.getDDICObject(args as unknown as GetDDICObjectInput),
+      handler: (args) => this.ddicHandler.getDDICObject(this.mapDDICObjectArgs(args) as unknown as GetDDICObjectInput),
     });
 
     // activate_ddic_object
@@ -383,7 +385,25 @@ export class SAPABAPMCPServer {
           required: ['objectType', 'objectName'],
         },
       },
-      handler: (args) => this.ddicHandler.activateDDICObject(args as unknown as ActivateDDICObjectInput),
+      handler: (args) => this.ddicHandler.activateDDICObject(this.mapDDICObjectArgs(args) as unknown as ActivateDDICObjectInput),
+    });
+
+    // delete_ddic_object
+    this.tools.set('delete_ddic_object', {
+      tool: {
+        name: 'delete_ddic_object',
+        description: 'Delete a DDIC object (data element, domain, table, structure, table type)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Object name' },
+            objectType: { type: 'string', enum: ['DTEL', 'DOMA', 'TABL', 'STRU', 'TTYP'], description: 'DDIC object type' },
+            transportRequest: { type: 'string', description: 'Transport request number (optional for $TMP objects)' },
+          },
+          required: ['name', 'objectType'],
+        },
+      },
+      handler: (args) => this.ddicHandler.deleteDDICObject(args as unknown as DeleteDDICObjectInput),
     });
   }
 
@@ -552,7 +572,7 @@ export class SAPABAPMCPServer {
           required: ['name', 'functionGroup', 'description', 'package'],
         },
       },
-      handler: (args) => this.programHandler.createFunctionModule(this.mapArgs<CreateFunctionModuleInput>(args)),
+      handler: (args) => this.programHandler.createFunctionModule(this.mapFunctionModuleArgs(args)),
     });
 
     // create_report
@@ -593,6 +613,7 @@ export class SAPABAPMCPServer {
           properties: {
             objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
+            functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
           },
           required: ['objectType', 'objectName'],
         },
@@ -610,6 +631,7 @@ export class SAPABAPMCPServer {
           properties: {
             objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
+            functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
             source: { type: 'string', description: 'New source code' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
@@ -647,6 +669,7 @@ export class SAPABAPMCPServer {
           properties: {
             objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC', 'TABL', 'DTEL', 'DOMA'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
+            functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
           },
           required: ['objectType', 'objectName'],
         },
@@ -664,6 +687,7 @@ export class SAPABAPMCPServer {
           properties: {
             objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC', 'TABL', 'DTEL', 'DOMA'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
+            functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
           },
           required: ['objectType', 'objectName'],
         },
@@ -681,6 +705,7 @@ export class SAPABAPMCPServer {
           properties: {
             objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
+            functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
           },
           required: ['objectType', 'objectName'],
         },
@@ -698,11 +723,39 @@ export class SAPABAPMCPServer {
           properties: {
             objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
+            functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
           },
           required: ['objectType', 'objectName'],
         },
       },
       handler: (args) => this.programHandler.checkSyntax(this.mapObjectTypeNameToUri(args) as unknown as CheckSyntaxInput),
+    });
+
+    // delete_object
+    this.tools.set('delete_object', {
+      tool: {
+        name: 'delete_object',
+        description: 'Delete an ABAP object (class, interface, function group, function module, report). For function modules (FUNC type), the functionGroup parameter is required.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG'], description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+            functionGroup: { type: 'string', description: 'Function group name (required for FUNC type to build correct URI)' },
+            transportRequest: { type: 'string', description: 'Transport request number (optional for $TMP objects)' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => {
+        // Map 'objectName' to 'name' as expected by DeleteObjectInput
+        const mapped: Record<string, unknown> = { ...args };
+        if ('objectName' in args && !('name' in args)) {
+          mapped.name = args.objectName;
+        }
+        // functionGroup is already in args and will be passed through
+        return this.programHandler.deleteObject(mapped as unknown as DeleteObjectInput);
+      },
     });
   }
 
@@ -1308,8 +1361,22 @@ export class SAPABAPMCPServer {
     
     const objectType = args.objectType as string;
     const objectName = args.objectName as string;
+    const functionGroup = args.functionGroup as string;
     
     if (!objectType || !objectName) {
+      return mapped;
+    }
+    
+    // Special handling for FUNC type - requires functionGroup
+    if (objectType.toUpperCase() === 'FUNC') {
+      if (functionGroup) {
+        // Correct URI format: /sap/bc/adt/functions/groups/{group_name}/fmodules/{func_name}
+        mapped.objectUri = `/sap/bc/adt/functions/groups/${functionGroup.toLowerCase()}/fmodules/${objectName.toLowerCase()}`;
+      } else {
+        // Fallback - may not work correctly without function group
+        this.logger.warn(`FUNC type without functionGroup parameter - URI may be incorrect for: ${objectName}`);
+        mapped.objectUri = `/sap/bc/adt/functions/groups/unknown/fmodules/${objectName.toLowerCase()}`;
+      }
       return mapped;
     }
     
@@ -1318,7 +1385,6 @@ export class SAPABAPMCPServer {
       'CLAS': '/sap/bc/adt/oo/classes/',
       'INTF': '/sap/bc/adt/oo/interfaces/',
       'FUGR': '/sap/bc/adt/functions/groups/',
-      'FUNC': '/sap/bc/adt/functions/',
       'PROG': '/sap/bc/adt/programs/programs/',
       'REPS': '/sap/bc/adt/programs/programs/',
       'INCL': '/sap/bc/adt/programs/includes/',
@@ -1373,5 +1439,89 @@ export class SAPABAPMCPServer {
     }
     
     return mapped as T;
+  }
+
+  /**
+   * Map DDIC object args from MCP schema to handler input
+   * Converts 'objectName' to 'name' as required by GetDDICObjectInput/ActivateDDICObjectInput
+   */
+  private mapDDICObjectArgs(args: Record<string, unknown>): Record<string, unknown> {
+    const mapped: Record<string, unknown> = { ...args };
+    
+    // Map 'objectName' to 'name' for DDIC object handlers
+    if ('objectName' in args && !('name' in args)) {
+      mapped.name = args.objectName;
+    }
+    
+    return mapped;
+  }
+
+  /**
+   * Map function module args from MCP schema to handler input
+   * MCP schema uses: importing, exporting, changing, tables with type/optional/default
+   * Handler expects: importParameters, exportParameters, changingParameters, tableParameters with typeName/isOptional/defaultValue
+   */
+  private mapFunctionModuleArgs(args: Record<string, unknown>): CreateFunctionModuleInput {
+    const mapped: Record<string, unknown> = { ...args };
+    
+    // Map 'package' to 'packageName'
+    if ('package' in args && !('packageName' in args)) {
+      mapped.packageName = args.package;
+    }
+
+    // Helper function to map parameter array properties
+    const mapParameterArray = (params: unknown[]): Array<{
+      name: string;
+      typeName: string;
+      isOptional?: boolean;
+      defaultValue?: string;
+      description?: string;
+    }> => {
+      return params.map((p: unknown) => {
+        const param = p as Record<string, unknown>;
+        return {
+          name: param.name as string,
+          typeName: (param.type || param.typeName) as string,
+          isOptional: param.optional !== undefined ? param.optional as boolean : param.isOptional as boolean | undefined,
+          defaultValue: (param.default || param.defaultValue) as string | undefined,
+          description: param.description as string | undefined,
+        };
+      });
+    };
+
+    // Map 'importing' to 'importParameters'
+    if (Array.isArray(args.importing) && args.importing.length > 0) {
+      mapped.importParameters = mapParameterArray(args.importing);
+    }
+
+    // Map 'exporting' to 'exportParameters'
+    if (Array.isArray(args.exporting) && args.exporting.length > 0) {
+      mapped.exportParameters = mapParameterArray(args.exporting);
+    }
+
+    // Map 'changing' to 'changingParameters'
+    if (Array.isArray(args.changing) && args.changing.length > 0) {
+      mapped.changingParameters = mapParameterArray(args.changing);
+    }
+
+    // Map 'tables' to 'tableParameters'
+    if (Array.isArray(args.tables) && args.tables.length > 0) {
+      mapped.tableParameters = mapParameterArray(args.tables);
+    }
+
+    // Map 'exceptions' from string array to object array
+    // MCP schema defines exceptions as string array: ["EXCEPTION_NAME"]
+    // Handler expects object array: [{name: "EXCEPTION_NAME", description?: string}]
+    if (Array.isArray(args.exceptions) && args.exceptions.length > 0) {
+      mapped.exceptions = args.exceptions.map((e: unknown) => {
+        if (typeof e === 'string') {
+          return { name: e };
+        }
+        // If already an object, return as-is
+        return e;
+      });
+    }
+
+    return mapped as unknown as CreateFunctionModuleInput;
   }
 }

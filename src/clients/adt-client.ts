@@ -681,6 +681,213 @@ export class ADTClient {
   }
 
   /**
+   * Delete ADT object using the ADT Deletion API
+   * 
+   * This method uses the newer ADT Deletion API which does NOT require locking first.
+   * This is essential for deleting objects that cannot be locked (e.g., empty function modules).
+   * 
+   * API Flow:
+   * 1. POST /sap/bc/adt/deletion/check - Check if object can be deleted
+   * 2. POST /sap/bc/adt/deletion/delete - Execute the deletion
+   * 
+   * @param objectUri - The object URI (e.g., /sap/bc/adt/functions/groups/zfgr_todo/fmodules/z_todo_create)
+   * @param transportRequest - Optional transport request number (empty for $TMP objects)
+   */
+  async deleteObject(objectUri: string, transportRequest?: string): Promise<void> {
+    // For deletion API, we need the FULL URI with /sap/bc/adt prefix
+    const fullUri = objectUri.startsWith('/sap/bc/adt') 
+      ? objectUri 
+      : `/sap/bc/adt${this.normalizeUri(objectUri)}`;
+    
+    this.logger.adtOperation('delete', undefined, fullUri);
+    this.logger.info(`Deleting object using ADT Deletion API: ${fullUri}`);
+    
+    try {
+      // Step 1: Check if object can be deleted
+      await this.deletionCheck(fullUri);
+      this.logger.debug(`Deletion check passed for: ${fullUri}`);
+      
+      // Step 2: Execute the deletion
+      await this.deletionExecute(fullUri, transportRequest);
+      this.logger.info(`Object deleted successfully: ${fullUri}`);
+      
+    } catch (error) {
+      this.logger.error(`Failed to delete object: ${fullUri}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if an object can be deleted using ADT Deletion API
+   * 
+   * Request:
+   *   POST /sap/bc/adt/deletion/check
+   *   Content-Type: application/vnd.sap.adt.deletion.check.request.v1+xml
+   *   Accept: application/vnd.sap.adt.deletion.check.response.v1+xml
+   *   Body: <del:checkRequest><del:object adtcore:uri="..."/></del:checkRequest>
+   * 
+   * @param fullUri - Full object URI with /sap/bc/adt prefix
+   */
+  private async deletionCheck(fullUri: string): Promise<void> {
+    const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
+<del:checkRequest xmlns:adtcore="http://www.sap.com/adt/core" xmlns:del="http://www.sap.com/adt/deletion">
+  <del:object adtcore:uri="${fullUri}"/>
+</del:checkRequest>`;
+
+    this.logger.debug(`Deletion check request body:\n${requestBody}`);
+
+    const response = await this.post('/deletion/check', requestBody, {
+      headers: {
+        'Content-Type': 'application/vnd.sap.adt.deletion.check.request.v1+xml',
+        'Accept': 'application/vnd.sap.adt.deletion.check.response.v1+xml, application/xml, */*'
+      }
+    });
+
+    this.logger.debug(`Deletion check response: ${response.status}\n${response.raw}`);
+
+    // Parse response to check for errors
+    if (response.raw) {
+      const parsed = parseXML(response.raw);
+      
+      // Check for error messages in the response
+      const errorElements = this.findElements(parsed, 'error');
+      if (errorElements.length > 0) {
+        const errorRecord = errorElements[0] as Record<string, unknown>;
+        const errorMessage = String(errorRecord['#text'] || errorRecord['message'] || 'Deletion check failed');
+        throw new ADTError(
+          `Cannot delete object: ${errorMessage}`,
+          ErrorCodes.ADT_OPERATION_FAILED,
+          undefined,
+          { uri: fullUri }
+        );
+      }
+
+      // Also check for deletion not allowed indicators
+      const notAllowedElements = this.findElements(parsed, 'notAllowed');
+      if (notAllowedElements.length > 0) {
+        throw new ADTError(
+          'Object deletion is not allowed',
+          ErrorCodes.ADT_OPERATION_FAILED,
+          undefined,
+          { uri: fullUri }
+        );
+      }
+    }
+  }
+
+  /**
+   * Execute object deletion using ADT Deletion API
+   * 
+   * Request:
+   *   POST /sap/bc/adt/deletion/delete
+   *   Content-Type: application/vnd.sap.adt.deletion.request.v1+xml
+   *   Accept: application/vnd.sap.adt.deletion.response.v1+xml
+   *   Body: <del:deletionRequest><del:object adtcore:uri="..."><del:transportNumber>...</del:transportNumber></del:object></del:deletionRequest>
+   * 
+   * @param fullUri - Full object URI with /sap/bc/adt prefix
+   * @param transportRequest - Optional transport request number (empty for $TMP objects)
+   */
+  private async deletionExecute(fullUri: string, transportRequest?: string): Promise<void> {
+    // Transport number is empty for local $TMP objects
+    const transportNumber = transportRequest || '';
+    
+    const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
+<del:deletionRequest xmlns:adtcore="http://www.sap.com/adt/core" xmlns:del="http://www.sap.com/adt/deletion">
+  <del:object adtcore:uri="${fullUri}">
+    <del:transportNumber>${transportNumber}</del:transportNumber>
+  </del:object>
+</del:deletionRequest>`;
+
+    this.logger.debug(`Deletion execute request body:\n${requestBody}`);
+
+    const response = await this.post('/deletion/delete', requestBody, {
+      headers: {
+        'Content-Type': 'application/vnd.sap.adt.deletion.request.v1+xml',
+        'Accept': 'application/vnd.sap.adt.deletion.response.v1+xml, application/xml, */*'
+      }
+    });
+
+    this.logger.debug(`Deletion execute response: ${response.status}\n${response.raw}`);
+
+    // Parse response to check for errors
+    if (response.raw) {
+      const parsed = parseXML(response.raw);
+      
+      // Check for error messages
+      const errorElements = this.findElements(parsed, 'error');
+      if (errorElements.length > 0) {
+        const errorRecord = errorElements[0] as Record<string, unknown>;
+        const errorMessage = String(errorRecord['#text'] || errorRecord['message'] || 'Deletion failed');
+        throw new ADTError(
+          `Failed to delete object: ${errorMessage}`,
+          ErrorCodes.ADT_OPERATION_FAILED,
+          undefined,
+          { uri: fullUri }
+        );
+      }
+
+      // Check for failure status in deletionResponse
+      const failedElements = this.findElements(parsed, 'failed');
+      if (failedElements.length > 0) {
+        throw new ADTError(
+          'Object deletion failed',
+          ErrorCodes.ADT_OPERATION_FAILED,
+          undefined,
+          { uri: fullUri }
+        );
+      }
+    }
+  }
+
+  /**
+   * Legacy delete method using lock/DELETE workflow
+   * Kept for objects that require locking before deletion
+   * 
+   * @param objectUri - The object URI
+   * @param transportRequest - Optional transport request number
+   */
+  async deleteObjectWithLock(objectUri: string, transportRequest?: string): Promise<void> {
+    const normalizedUri = this.normalizeUri(objectUri);
+    this.logger.adtOperation('deleteWithLock', undefined, normalizedUri);
+    
+    let lockHandle: LockHandle | undefined;
+    
+    try {
+      // Step 1: Lock the object
+      lockHandle = await this.lockObject(normalizedUri);
+      this.logger.debug(`Object locked for deletion: ${normalizedUri}`);
+      
+      // Step 2: Send DELETE request with lock handle
+      const params: Record<string, string> = {
+        lockHandle: lockHandle.lockHandle
+      };
+      
+      // Add transport request if provided
+      if (transportRequest) {
+        params.corrNr = transportRequest;
+      }
+      
+      await this.delete(normalizedUri, { params });
+      this.logger.info(`Object deleted successfully: ${normalizedUri}`);
+      
+      // Remove lock from cache (object no longer exists)
+      this.activeLocks.delete(normalizedUri);
+      
+    } catch (error) {
+      // If deletion fails, try to unlock the object
+      if (lockHandle) {
+        try {
+          await this.unlockObject(normalizedUri, lockHandle.lockHandle);
+          this.logger.debug(`Object unlocked after failed deletion: ${normalizedUri}`);
+        } catch (unlockError) {
+          this.logger.warn(`Failed to unlock object after deletion error: ${normalizedUri}`, unlockError);
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Release all active locks
    */
   async releaseAllLocks(): Promise<void> {
@@ -706,20 +913,40 @@ export class ADTClient {
 
   /**
    * Activate ADT object(s)
+   * 
+   * SAP ADT activation API requires:
+   * 1. Full URI with /sap/bc/adt prefix in objectReference
+   * 2. Object type in the format like DOMA/DD, DTEL/DE, TABL/DT, etc.
+   * 3. Object name in uppercase
+   * 
+   * @param objectUris - Single URI or array of URIs (normalized, without /sap/bc/adt prefix)
+   * @param options - Activation options
    */
   async activate(
     objectUris: string | string[],
-    options?: { preauditRequested?: boolean }
+    options?: { 
+      preauditRequested?: boolean;
+      objectTypes?: string | string[];  // Object types like DOMA/DD, DTEL/DE
+    }
   ): Promise<{ success: boolean; messages: Array<{ type: string; message: string }> }> {
     const uris = Array.isArray(objectUris) ? objectUris : [objectUris];
+    const types = options?.objectTypes 
+      ? (Array.isArray(options.objectTypes) ? options.objectTypes : [options.objectTypes])
+      : [];
+    
     this.logger.adtOperation('activate', undefined, uris.join(', '));
 
     // Build activation request body
+    // SAP ADT requires full URI with /sap/bc/adt prefix
     const entriesXml = uris
-      .map(
-        (uri) =>
-          `<adtcore:objectReference adtcore:uri="${uri}" adtcore:name="${this.extractNameFromUri(uri)}"/>`
-      )
+      .map((uri, index) => {
+        const normalizedUri = this.normalizeUri(uri);
+        const fullUri = `/sap/bc/adt${normalizedUri}`;
+        const objectName = this.extractNameFromUri(normalizedUri).toUpperCase();
+        const objectType = types[index] || this.inferObjectTypeFromUri(normalizedUri);
+        
+        return `  <adtcore:objectReference adtcore:uri="${fullUri}" adtcore:type="${objectType}" adtcore:name="${objectName}"/>`;
+      })
       .join('\n');
 
     const requestBody = `<?xml version="1.0" encoding="UTF-8"?>
@@ -727,10 +954,15 @@ export class ADTClient {
 ${entriesXml}
 </adtcore:objectReferences>`;
 
+    this.logger.debug(`Activation request body:\n${requestBody}`);
+
     const response = await this.post('/activation', requestBody, {
+      headers: {
+        'Content-Type': 'application/xml'
+      },
       params: {
         method: 'activate',
-        preauditRequested: options?.preauditRequested ? 'true' : 'false'
+        preauditRequested: options?.preauditRequested !== false ? 'true' : 'false'
       }
     });
 
@@ -1133,6 +1365,89 @@ ${entriesXml}
   setSessionType(type: 'stateful' | 'stateless'): void {
     this.sessionType = type;
     this.logger.debug(`Session type set to: ${type}`);
+  }
+
+  /**
+   * Infer object type from URI for activation
+   * Maps URI paths to ADT object types (e.g., DOMA/DD, DTEL/DE, TABL/DT)
+   * 
+   * @param uri - The object URI (normalized, without /sap/bc/adt prefix)
+   * @returns The inferred object type
+   */
+  private inferObjectTypeFromUri(uri: string): string {
+    // DDIC Domains: /ddic/domains/{name} -> DOMA/DD
+    if (uri.includes('/ddic/domains/')) {
+      return 'DOMA/DD';
+    }
+    
+    // DDIC Data Elements: /ddic/dataelements/{name} -> DTEL/DE
+    if (uri.includes('/ddic/dataelements/')) {
+      return 'DTEL/DE';
+    }
+    
+    // DDIC Tables: /ddic/tables/{name} -> TABL/DT
+    if (uri.includes('/ddic/tables/')) {
+      return 'TABL/DT';
+    }
+    
+    // DDIC Structures: /ddic/structures/{name} -> STRU/I (or TABL/DS for append structures)
+    if (uri.includes('/ddic/structures/')) {
+      return 'STRU/I';
+    }
+    
+    // DDIC Table Types: /ddic/tabletypes/{name} -> TTYP/DA
+    if (uri.includes('/ddic/tabletypes/')) {
+      return 'TTYP/DA';
+    }
+    
+    // ABAP Classes: /oo/classes/{name} -> CLAS/OC
+    if (uri.includes('/oo/classes/')) {
+      return 'CLAS/OC';
+    }
+    
+    // ABAP Interfaces: /oo/interfaces/{name} -> INTF/OI
+    if (uri.includes('/oo/interfaces/')) {
+      return 'INTF/OI';
+    }
+    
+    // ABAP Programs/Reports: /programs/programs/{name} -> PROG/P
+    if (uri.includes('/programs/programs/')) {
+      return 'PROG/P';
+    }
+    
+    // Include Programs: /programs/includes/{name} -> PROG/I
+    if (uri.includes('/programs/includes/')) {
+      return 'PROG/I';
+    }
+    
+    // Function Groups: /functions/groups/{name} -> FUGR/F
+    if (uri.includes('/functions/groups/')) {
+      return 'FUGR/F';
+    }
+    
+    // Function Modules: /functions/groups/{group}/fmodules/{name} -> FUGR/FF
+    if (uri.includes('/fmodules/')) {
+      return 'FUGR/FF';
+    }
+    
+    // CDS Views: /ddls/sources/{name} -> DDLS/DF
+    if (uri.includes('/ddls/sources/')) {
+      return 'DDLS/DF';
+    }
+    
+    // Service Definitions: /srvd/sources/{name} -> SRVD/SRV
+    if (uri.includes('/srvd/sources/')) {
+      return 'SRVD/SRV';
+    }
+    
+    // Service Bindings: /srvb/sources/{name} -> SRVB/SVB
+    if (uri.includes('/srvb/sources/')) {
+      return 'SRVB/SVB';
+    }
+    
+    // Default fallback - use generic type
+    this.logger.warn(`Could not infer object type from URI: ${uri}, using default`);
+    return 'UNKN/XX';
   }
 
   /**

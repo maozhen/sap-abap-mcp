@@ -919,24 +919,59 @@ describe('ProgramToolHandler', () => {
       objectType: 'CLAS' as ADTObjectType,
     };
 
-    it('should find where used successfully', async () => {
+    it('should find where used successfully with two-step process', async () => {
+      // The whereUsed method uses a two-step process:
+      // 1. POST to /usageReferences/scope to get scope configuration
+      // 2. POST to /usageReferences with the scope to execute the query
+      const scopeResponseXml = `<?xml version="1.0" encoding="UTF-8"?>
+<usagereferences:usageScopeResponse xmlns:usagereferences="http://www.sap.com/adt/ris/usageReferences">
+  <usagereferences:objectIdentifier displayName="ZCL_TEST" globalType="CLAS"/>
+  <usagereferences:grade definitions="true" elements="true" indirectReferences="true"/>
+  <usagereferences:objectTypes>
+    <usagereferences:type isDefault="true" isSelected="true" name="CLAS/OC"/>
+    <usagereferences:type isDefault="true" isSelected="true" name="PROG/P"/>
+  </usagereferences:objectTypes>
+</usagereferences:usageScopeResponse>`;
+
       const whereUsedXml = `<?xml version="1.0" encoding="UTF-8"?>
 <usagereferences:usageReferenceResult xmlns:usagereferences="http://www.sap.com/adt/repository/informationsystem/usageReferences" xmlns:adtcore="http://www.sap.com/adt/core">
   <usagereferences:objectReference adtcore:uri="/oo/classes/zcl_consumer1" adtcore:name="ZCL_CONSUMER1" adtcore:type="CLAS" usageType="reference"/>
   <usagereferences:objectReference adtcore:uri="/programs/programs/ztest_prog" adtcore:name="ZTEST_PROG" adtcore:type="PROG" usageType="reference" line="50" column="10"/>
 </usagereferences:usageReferenceResult>`;
-      mockClient.setupPostSuccess(whereUsedXml);
+
+      // First call returns scope response, second call returns where used result
+      mockClient.post
+        .mockResolvedValueOnce(createMockResponse(scopeResponseXml))
+        .mockResolvedValueOnce(createMockResponse(whereUsedXml));
 
       const result = await handler.whereUsed(whereUsedInput);
 
       expect(result.success).toBe(true);
       expect(result.data?.objectName).toBe('ZCL_TEST');
       expect(result.data?.objectType).toBe('CLAS');
-      expect(mockClient.post).toHaveBeenCalledWith(
-        '/repository/informationsystem/usageReferences',
-        '',
+      
+      // Verify first call (scope request)
+      expect(mockClient.post).toHaveBeenNthCalledWith(
+        1,
+        '/repository/informationsystem/usageReferences/scope',
+        expect.any(String),
         expect.objectContaining({
-          headers: { 'Accept': 'application/vnd.sap.adt.repository.usagereferences.result.v1+xml, application/xml, */*' },
+          headers: expect.objectContaining({
+            'Content-Type': 'application/vnd.sap.adt.repository.usagereferences.scope.request.v1+xml',
+          }),
+          params: { uri: '/sap/bc/adt/oo/classes/zcl_test' },
+        })
+      );
+      
+      // Verify second call (query request)
+      expect(mockClient.post).toHaveBeenNthCalledWith(
+        2,
+        '/repository/informationsystem/usageReferences',
+        expect.any(String),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'Content-Type': 'application/vnd.sap.adt.repository.usagereferences.request.v1+xml',
+          }),
           params: { uri: '/sap/bc/adt/oo/classes/zcl_test' },
         })
       );

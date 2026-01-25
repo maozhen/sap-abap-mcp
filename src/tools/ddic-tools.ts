@@ -63,6 +63,12 @@ export interface ActivateDDICObjectInput {
   objectType: 'DTEL' | 'DOMA' | 'TABL' | 'STRU' | 'TTYP';
 }
 
+export interface DeleteDDICObjectInput {
+  name: string;
+  objectType: 'DTEL' | 'DOMA' | 'TABL' | 'STRU' | 'TTYP';
+  transportRequest?: string;
+}
+
 const DDIC_URI_PREFIXES: Record<string, string> = {
   DTEL: '/ddic/dataelements',
   DOMA: '/ddic/domains',
@@ -271,12 +277,154 @@ export class DDICToolHandler {
       const parsed = parseXML<Record<string, unknown>>(response.data);
       const adtObject = this.parseADTObjectFromXML(parsed, args.name, args.objectType as ADTObjectType, uri);
 
+      // For TABL and STRU, also fetch source code to get field/component definitions
+      if (args.objectType === 'TABL' || args.objectType === 'STRU') {
+        try {
+          const sourceUri = `${uri}/source/main`;
+          const sourceResponse = await this.adtClient.get<string>(sourceUri, {
+            headers: { 'Accept': 'text/plain' }
+          });
+          
+          if (sourceResponse.data) {
+            const ddlSource = sourceResponse.data;
+            this.logger.debug(`DDL source for ${args.name}:\n${ddlSource}`);
+            
+            // Parse DDL source to extract field definitions
+            const fields = this.parseDDLSourceFields(ddlSource);
+            
+            // Extend ADTObject with fields information
+            (adtObject as ADTObject & { fields?: TableField[]; source?: string }).fields = fields;
+            (adtObject as ADTObject & { fields?: TableField[]; source?: string }).source = ddlSource;
+            
+            this.logger.info(`DDIC object ${args.name} retrieved with ${fields.length} fields`);
+          }
+        } catch (sourceError) {
+          // Source retrieval failed, but we still have basic metadata
+          this.logger.warn(`Failed to retrieve source for ${args.name}: ${sourceError}`);
+        }
+      }
+
       this.logger.info(`DDIC object ${args.name} retrieved successfully`);
       return { success: true, data: adtObject };
     } catch (error) {
       this.logger.error(`Failed to get DDIC object ${args.name}`, error);
       return this.createErrorResponse('GET_DDIC_FAILED', `Failed to get DDIC object: ${error}`, error);
     }
+  }
+
+  /**
+   * Parse DDL source code to extract field definitions
+   * 
+   * DDL source format for tables:
+   * ```
+   * @EndUserText.label : 'Description'
+   * @AbapCatalog.tableCategory : #TRANSPARENT
+   * @AbapCatalog.deliveryClass : #A
+   * define table tablename {
+   *   key mandt   : mandt not null;
+   *   key field1  : datatype not null;
+   *   field2      : datatype;
+   *   field3      : abap.char(10);
+   * }
+   * ```
+   * 
+   * @param ddlSource - The DDL source code
+   * @returns Array of parsed TableField definitions
+   */
+  private parseDDLSourceFields(ddlSource: string): TableField[] {
+    const fields: TableField[] = [];
+    
+    // Find the field definitions block within curly braces
+    // Pattern: define table/structure name { ... }
+    const defineMatch = ddlSource.match(/define\s+(?:table|structure)\s+\w+\s*\{([^}]+)\}/is);
+    if (!defineMatch) {
+      this.logger.debug('Could not find field definition block in DDL source');
+      return fields;
+    }
+    
+    const fieldBlock = defineMatch[1];
+    const lines = fieldBlock.split('\n');
+    
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine || trimmedLine.startsWith('//') || trimmedLine.startsWith('include ')) {
+        continue;
+      }
+      
+      // Parse field definition
+      // Format: [key] fieldname : datatype [not null];
+      // Examples:
+      //   key mandt   : mandt not null;
+      //   key todo_id : ztodo_id not null;
+      //   title       : ztodo_title not null;
+      //   amount      : abap.dec(13,2);
+      //   name        : abap.char(40);
+      const fieldMatch = trimmedLine.match(
+        /^(key\s+)?(\w+)\s*:\s*([^\s;]+(?:\([^)]+\))?)\s*(not\s+null)?\s*;?\s*$/i
+      );
+      
+      if (fieldMatch) {
+        const isKey = !!fieldMatch[1];
+        const fieldName = fieldMatch[2];
+        const typeSpec = fieldMatch[3];
+        const isNotNull = !!fieldMatch[4];
+        
+        // Parse type specification
+        // Could be: dataElement name (e.g., "mandt", "ztodo_id")
+        // Or: built-in type (e.g., "abap.char(10)", "abap.dec(13,2)")
+        const field: TableField = {
+          name: fieldName.toUpperCase(),
+          isKey,
+          isNotNull,
+        };
+        
+        const builtInMatch = typeSpec.match(/^abap\.(\w+)(?:\((\d+)(?:,(\d+))?\))?$/i);
+        if (builtInMatch) {
+          // Built-in ABAP type
+          const dataTypeMap: Record<string, string> = {
+            'char': 'CHAR',
+            'numc': 'NUMC',
+            'dec': 'DEC',
+            'int1': 'INT1',
+            'int2': 'INT2',
+            'int4': 'INT4',
+            'int8': 'INT8',
+            'dats': 'DATS',
+            'tims': 'TIMS',
+            'string': 'STRING',
+            'xstring': 'XSTRING',
+            'clnt': 'CLNT',
+            'lang': 'LANG',
+            'raw': 'RAW',
+            'rawstring': 'RAWSTRING',
+            'fltp': 'FLTP',
+            'curr': 'CURR',
+            'cuky': 'CUKY',
+            'quan': 'QUAN',
+            'unit': 'UNIT',
+            'd16n': 'D16N',
+            'd34n': 'D34N',
+            'd16d': 'D16D',
+            'd34d': 'D34D',
+          };
+          field.dataType = dataTypeMap[builtInMatch[1].toLowerCase()] || builtInMatch[1].toUpperCase();
+          if (builtInMatch[2]) {
+            field.length = parseInt(builtInMatch[2], 10);
+          }
+          if (builtInMatch[3]) {
+            field.decimals = parseInt(builtInMatch[3], 10);
+          }
+        } else {
+          // Data element reference
+          field.dataElement = typeSpec.toUpperCase();
+        }
+        
+        fields.push(field);
+        this.logger.debug(`Parsed field: ${JSON.stringify(field)}`);
+      }
+    }
+    
+    return fields;
   }
 
   async activateDDICObject(args: ActivateDDICObjectInput): Promise<ToolResponse<ActivationResult>> {
@@ -312,6 +460,39 @@ export class DDICToolHandler {
     } catch (error) {
       this.logger.error(`Failed to activate DDIC object ${args.name}`, error);
       return this.createErrorResponse('ACTIVATE_DDIC_FAILED', `Failed to activate DDIC object: ${error}`, error);
+    }
+  }
+
+  /**
+   * Delete a DDIC object
+   * SAP ADT requires: lock object -> DELETE request -> unlock (on failure)
+   */
+  async deleteDDICObject(args: DeleteDDICObjectInput): Promise<ToolResponse<{ deleted: boolean; name: string; objectType: string }>> {
+    this.logger.info(`Deleting DDIC object: ${args.objectType}/${args.name}`);
+
+    try {
+      const uriPrefix = DDIC_URI_PREFIXES[args.objectType];
+      if (!uriPrefix) {
+        return this.createErrorResponse('INVALID_OBJECT_TYPE', `Invalid DDIC object type: ${args.objectType}`);
+      }
+
+      const uri = `${uriPrefix}/${args.name.toLowerCase()}`;
+      
+      // Use ADTClient's deleteObject method which handles lock -> delete -> unlock
+      await this.adtClient.deleteObject(uri, args.transportRequest);
+      
+      this.logger.info(`DDIC object ${args.name} deleted successfully`);
+      return {
+        success: true,
+        data: {
+          deleted: true,
+          name: args.name.toUpperCase(),
+          objectType: args.objectType,
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Failed to delete DDIC object ${args.name}`, error);
+      return this.createErrorResponse('DELETE_DDIC_FAILED', `Failed to delete DDIC object: ${error}`, error);
     }
   }
 

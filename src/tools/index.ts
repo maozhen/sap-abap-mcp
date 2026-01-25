@@ -10,6 +10,7 @@ export {
   CreateTableTypeInput,
   GetDDICObjectInput,
   ActivateDDICObjectInput,
+  DeleteDDICObjectInput,
 } from './ddic-tools';
 
 // Program Tools - ABAP program development
@@ -26,6 +27,7 @@ export {
   SearchObjectsInput,
   WhereUsedInput,
   GetObjectMetadataInput,
+  DeleteObjectInput,
 } from './program-tools';
 
 // CDS Tools - Core Data Services
@@ -204,6 +206,12 @@ export const TOOL_DEFINITIONS = {
     handler: 'ddic',
     method: 'activateDDICObject',
   },
+  deleteDDICObject: {
+    name: 'delete_ddic_object',
+    description: 'Delete a DDIC object (data element, domain, table, structure, table type)',
+    handler: 'ddic',
+    method: 'deleteDDICObject',
+  },
 
   // Program Tools
   createClass: {
@@ -271,6 +279,12 @@ export const TOOL_DEFINITIONS = {
     description: 'Get where-used list for an ABAP object',
     handler: 'program',
     method: 'getWhereUsed',
+  },
+  deleteObject: {
+    name: 'delete_object',
+    description: 'Delete an ABAP object (class, interface, program, function group, function module)',
+    handler: 'program',
+    method: 'deleteObject',
   },
 
   // CDS Tools
