@@ -625,7 +625,44 @@ export class SAPABAPMCPServer {
     this.tools.set('update_source_code', {
       tool: {
         name: 'update_source_code',
-        description: 'Update the source code of an ABAP object',
+        description: `Update the source code of an ABAP object.
+
+**IMPORTANT for Function Module (FUNC) updates:**
+When updating a Function Module's source code, you MUST use the ADT format (as returned by get_source_code), NOT the SE37 format.
+
+**Correct ADT format example:**
+\`\`\`abap
+FUNCTION Z_MY_FUNCTION
+  IMPORTING
+    VALUE(IV_PARAM1) TYPE STRING
+    VALUE(IV_PARAM2) TYPE I OPTIONAL
+  EXPORTING
+    VALUE(EV_RESULT) TYPE STRING
+  EXCEPTIONS
+    MY_EXCEPTION.
+
+* Your implementation code here
+DATA: lv_temp TYPE string.
+lv_temp = iv_param1.
+ev_result = lv_temp.
+
+ENDFUNCTION.
+\`\`\`
+
+**WRONG SE37 format (DO NOT USE):**
+\`\`\`
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  IMPORTING
+*"     VALUE(IV_PARAM1) TYPE  STRING
+...
+\`\`\`
+
+**Key rules:**
+1. Do NOT include lines starting with *" - these are SE37 display format, not ADT format
+2. Always include the full function signature (IMPORTING/EXPORTING/CHANGING/TABLES/EXCEPTIONS sections)
+3. Do NOT omit or skip the parameter declaration lines when updating code
+4. The function signature and ENDFUNCTION statement must be present`,
         inputSchema: {
           type: 'object',
           properties: {
