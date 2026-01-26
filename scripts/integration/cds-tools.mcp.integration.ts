@@ -29,10 +29,10 @@ async function main(): Promise<void> {
   log(`SAP User: ${connInfo.user}`, 'gray');
   log(`Registered tools: ${client.getToolCount()}`, 'gray');
   
-  // Test object names (use suffix "6" to avoid locked objects)
-  const cdsViewName = `${TEST_PREFIX}CDS_MCP6`;
-  const serviceDefName = `${TEST_PREFIX}SD_MCP6`;
-  const serviceBindingName = `${TEST_PREFIX}SB_MCP6`;
+  // Test object names (use suffix "7" to avoid locked objects)
+  const cdsViewName = `${TEST_PREFIX}CDS_MCP7`;
+  const serviceDefName = `${TEST_PREFIX}SD_MCP7`;
+  const serviceBindingName = `${TEST_PREFIX}SB_MCP7`;
   
   // ============================================
   // CDS View Tests (create_cds_view, get_cds_view, get_cds_source, update_cds_source, activate_cds_object)

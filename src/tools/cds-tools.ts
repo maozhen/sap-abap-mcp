@@ -178,7 +178,7 @@ export class CDSToolHandler {
       this.logger.debug(`Service definition creation XML:\n${requestXml}`);
       
       await this.adtClient.post(collectionUri, requestXml, {
-        headers: { 'Content-Type': 'application/vnd.sap.adt.srvdSource+xml' },
+        headers: { 'Content-Type': 'application/vnd.sap.adt.ddic.srvd.v1+xml' },
         params: args.transportRequest ? { corrNr: args.transportRequest } : undefined,
       });
       this.logger.info(`Service definition ${args.name} basic structure created`);
@@ -488,32 +488,36 @@ export class CDSToolHandler {
   }
 
   private buildServiceDefinitionXML(args: CreateServiceDefinitionInput): string {
-    // SAP ADT expects namespace: http://www.sap.com/adt/ddic/srvdsources (plural, no slash)
-    // Package must be passed as child element, not attribute (same as DDIC objects)
-    // serviceDefinitionType attribute needs namespace prefix: srvdSource:serviceDefinitionType
-    // Valid values: ODATA, WEBAPI, etc.
-    const exposedEntitiesXml = args.exposedEntities.map(entity => ({
-      '@_srvdSource:entityName': entity.entityName,
-      ...(entity.alias && { '@_srvdSource:alias': entity.alias }),
-      ...(entity.repositoryName && { '@_srvdSource:repositoryName': entity.repositoryName }),
-    }));
+    // Based on analysis of existing SRVD objects (e.g., /AIF/MESSAGEMONITOR):
+    // - Response Content-Type: application/vnd.sap.adt.ddic.srvd.v1+xml
+    // - namespace prefix: srvd (not srvdSource)
+    // - namespace URI: http://www.sap.com/adt/ddic/srvdsources
+    // - Element name: srvd:srvdSource
+    // - Required attributes from existing SRVD:
+    //   srvd:sourceOrigin="0" (ABAP Development Tools)
+    //   srvd:srvdSourceType="S" (Definition)
+    // - exposedEntities should NOT be included in creation XML
+    //   (entities are defined via source code, not XML attributes)
+    // 
+    // Note: The actual service content (expose statements) is set via updateObjectSource
+    // using ABAP-style syntax like:
+    //   @EndUserText.label: 'My Service'
+    //   define service ZSRVD_NAME {
+    //     expose Z_CDS_VIEW as Entity;
+    //   }
 
     const obj = {
-      'srvdSource:srvdSource': {
-        '@_xmlns:srvdSource': 'http://www.sap.com/adt/ddic/srvdsources',
+      'srvd:srvdSource': {
+        '@_xmlns:srvd': 'http://www.sap.com/adt/ddic/srvdsources',
         '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
         '@_adtcore:name': args.name.toUpperCase(),
         '@_adtcore:description': args.description,
         '@_adtcore:masterLanguage': 'EN',
-        '@_srvdSource:serviceDefinitionType': 'ODATA',
+        '@_srvd:sourceOrigin': '0',
+        '@_srvd:srvdSourceType': 'S',
         'adtcore:packageRef': {
           '@_adtcore:name': args.packageName,
         },
-        ...(exposedEntitiesXml.length > 0 && {
-          'srvdSource:exposedEntities': {
-            'srvdSource:entity': exposedEntitiesXml,
-          },
-        }),
       },
     };
     return buildXML(obj);
@@ -522,25 +526,58 @@ export class CDSToolHandler {
   private buildServiceBindingXML(args: CreateServiceBindingInput): string {
     // SAP ADT expects namespace: http://www.sap.com/adt/ddic/ServiceBindings (CamelCase)
     // Package must be passed as child element, not attribute (same as DDIC objects)
-    const bindingTypeMap: Record<string, string> = {
-      ODATA_V2: 'ODATA_V2_UI',
-      ODATA_V4: 'ODATA_V4_UI',
-      ODATA_V2_UI: 'ODATA_V2_UI',
-      ODATA_V4_UI: 'ODATA_V4_UI',
+    // 
+    // Based on analysis of existing service bindings, the XML structure requires:
+    // - srvb:services element with service definition reference
+    // - srvb:binding element with type="ODATA", version="V2"/"V4", category="0"/"1"
+    // - srvb:implementation element within binding
+    //
+    // Binding type mapping:
+    // - ODATA_V2 -> type="ODATA", version="V2", category="0"
+    // - ODATA_V4 -> type="ODATA", version="V4", category="0"
+    // - ODATA_V2_UI -> type="ODATA", version="V2", category="1"
+    // - ODATA_V4_UI -> type="ODATA", version="V4", category="1"
+    
+    const bindingConfig: Record<string, { version: string; category: string }> = {
+      ODATA_V2: { version: 'V2', category: '0' },
+      ODATA_V4: { version: 'V4', category: '0' },
+      ODATA_V2_UI: { version: 'V2', category: '1' },
+      ODATA_V4_UI: { version: 'V4', category: '1' },
     };
+    
+    const config = bindingConfig[args.bindingType] || { version: 'V4', category: '0' };
+    const serviceDefName = args.serviceDefinition.toUpperCase();
+    const bindingName = args.name.toUpperCase();
 
     const obj = {
-      'serviceBinding:serviceBinding': {
-        '@_xmlns:serviceBinding': 'http://www.sap.com/adt/ddic/ServiceBindings',
+      'srvb:serviceBinding': {
+        '@_xmlns:srvb': 'http://www.sap.com/adt/ddic/ServiceBindings',
         '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
-        '@_adtcore:name': args.name.toUpperCase(),
+        '@_adtcore:name': bindingName,
         '@_adtcore:description': args.description,
         '@_adtcore:masterLanguage': 'EN',
         'adtcore:packageRef': {
           '@_adtcore:name': args.packageName,
         },
-        '@_serviceBinding:serviceDefinition': args.serviceDefinition.toUpperCase(),
-        '@_serviceBinding:bindingType': bindingTypeMap[args.bindingType] || args.bindingType,
+        'srvb:services': {
+          '@_srvb:name': serviceDefName,
+          'srvb:content': {
+            '@_srvb:version': '0001',
+            '@_srvb:releaseState': 'NOT_RELEASED',
+            'srvb:serviceDefinition': {
+              '@_adtcore:type': 'SRVD/SRV',
+              '@_adtcore:name': serviceDefName,
+            },
+          },
+        },
+        'srvb:binding': {
+          '@_srvb:type': 'ODATA',
+          '@_srvb:version': config.version,
+          '@_srvb:category': config.category,
+          'srvb:implementation': {
+            '@_adtcore:name': bindingName,
+          },
+        },
       },
     };
     return buildXML(obj);
