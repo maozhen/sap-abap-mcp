@@ -971,15 +971,62 @@ ${entriesXml}
     let success = true;
 
     if (response.raw) {
+      this.logger.debug(`Activation response:\n${response.raw}`);
       const parsed = parseXML(response.raw);
-      // Extract messages from response
+      
+      // ADT returns messages in <msg> elements, not <message>
+      // Format: <msg type="E" code="...">Error text</msg>
+      // Also check for <chkl:msg> elements (with namespace prefix)
+      const msgElements = this.findElements(parsed, 'msg');
+      
+      for (const msg of msgElements) {
+        const msgRecord = msg as Record<string, unknown>;
+        
+        // Get message type: E=error, W=warning, I=info, S=success
+        const msgType = String(msgRecord['@_type'] || 'I');
+        const type = msgType === 'E' ? 'error' : msgType === 'W' ? 'warning' : msgType === 'S' ? 'success' : 'info';
+        
+        // Get message text - can be in #text, shortText/txt, or direct content
+        let messageText = '';
+        
+        // Try #text first (direct text content)
+        if (msgRecord['#text']) {
+          messageText = String(msgRecord['#text']);
+        }
+        // Try shortText/txt structure (used in syntax check responses)
+        else if (msgRecord['shortText']) {
+          const shortText = msgRecord['shortText'] as Record<string, unknown>;
+          const txt = shortText['txt'];
+          if (txt && typeof txt === 'object' && '#text' in (txt as object)) {
+            messageText = String((txt as Record<string, unknown>)['#text']);
+          } else if (typeof txt === 'string') {
+            messageText = txt;
+          } else {
+            messageText = String(txt || '');
+          }
+        }
+        // Fallback to objDescr attribute or stringify the object
+        else {
+          messageText = String(msgRecord['@_objDescr'] || JSON.stringify(msg));
+        }
+        
+        messages.push({ type, message: messageText });
+        
+        // Mark as failure if any error messages
+        if (msgType === 'E') {
+          success = false;
+        }
+      }
+      
+      // Also check for <message> elements (some ADT responses use this)
       const messageElements = this.findElements(parsed, 'message');
       for (const msg of messageElements) {
         const msgRecord = msg as Record<string, unknown>;
-        const type = String(msgRecord['@_type'] || msgRecord['@_severity'] || 'info');
+        const msgType = String(msgRecord['@_type'] || msgRecord['@_severity'] || 'I');
+        const type = msgType === 'E' ? 'error' : msgType === 'W' ? 'warning' : msgType === 'S' ? 'success' : 'info';
         const text = String(msgRecord['#text'] || msgRecord['text'] || msg);
         messages.push({ type, message: text });
-        if (type === 'E' || type === 'error') {
+        if (msgType === 'E') {
           success = false;
         }
       }
@@ -1039,63 +1086,122 @@ ${entriesXml}
     if (response.raw) {
       const parsed = parseXML(response.raw);
       
-      // Parse messages from <chkl:messages> response
-      // The response format is: <msg type="E" line="295" href="...#start=295,2;end=295,10"><shortText><txt>Error text</txt></shortText></msg>
-      const messageElements = this.findElements(parsed, 'msg');
+      // Parse messages from response - handle multiple formats:
+      // 1. <chkrun:checkMessage> elements (from checkruns API)
+      // 2. <msg> elements (from activation API)
       
-      for (const msg of messageElements) {
-        const msgRecord = msg as Record<string, unknown>;
+      // First, try to find checkMessage elements (checkruns API response format)
+      // Format: <chkrun:checkMessage chkrun:uri="...#start=8,10;end=8,16" chkrun:type="E" chkrun:shortText="Error text" .../>
+      const checkMessageElements = this.findElements(parsed, 'checkMessage');
+      
+      for (const checkMsg of checkMessageElements) {
+        const msgRecord = checkMsg as Record<string, unknown>;
         
-        // Get message type: E=error, W=warning, I=info
-        const msgType = String(msgRecord['@_type'] || 'I');
+        // Get message type from chkrun:type or type attribute
+        // E=error, W=warning, I=info
+        const msgType = String(
+          msgRecord['@_chkrun:type'] || 
+          msgRecord['@_type'] || 
+          'I'
+        );
         const type = msgType === 'E' ? 'error' : msgType === 'W' ? 'warning' : 'info';
         
-        // Get line number from line attribute or parse from href
+        // Get message text from chkrun:shortText or shortText attribute
+        const messageText = String(
+          msgRecord['@_chkrun:shortText'] || 
+          msgRecord['@_shortText'] || 
+          ''
+        );
+        
+        // Parse line and column from chkrun:uri or uri attribute
+        // Format: "/sap/bc/adt/.../source/main#start=8,10;end=8,16"
         let line: number | undefined;
         let column: number | undefined;
         
-        // First try the line attribute
-        if (msgRecord['@_line']) {
-          line = parseInt(String(msgRecord['@_line']), 10);
+        const uri = String(
+          msgRecord['@_chkrun:uri'] || 
+          msgRecord['@_uri'] || 
+          ''
+        );
+        const uriMatch = uri.match(/#start=(\d+),(\d+)/);
+        if (uriMatch) {
+          line = parseInt(uriMatch[1], 10);
+          column = parseInt(uriMatch[2], 10);
         }
         
-        // Also try to parse from href which contains more precise location
-        // Format: href="...#start=295,2;end=295,10"
-        const href = String(msgRecord['@_href'] || '');
-        const hrefMatch = href.match(/#start=(\d+),(\d+)/);
-        if (hrefMatch) {
-          line = parseInt(hrefMatch[1], 10);
-          column = parseInt(hrefMatch[2], 10);
-        }
-        
-        // Get message text from shortText/txt element
-        let messageText = '';
-        const shortText = msgRecord['shortText'] as Record<string, unknown> | undefined;
-        if (shortText) {
-          const txt = shortText['txt'];
-          if (txt && typeof txt === 'object' && '#text' in (txt as object)) {
-            messageText = String((txt as Record<string, unknown>)['#text']);
-          } else if (typeof txt === 'string') {
-            messageText = txt;
-          } else {
-            messageText = String(txt || '');
+        if (messageText) {
+          messages.push({
+            line,
+            column,
+            type,
+            message: messageText
+          });
+          
+          if (type === 'error') {
+            hasErrors = true;
           }
         }
+      }
+      
+      // If no checkMessage elements found, try msg elements (activation API response format)
+      // Format: <msg type="E" line="295" href="...#start=295,2;end=295,10"><shortText><txt>Error text</txt></shortText></msg>
+      if (checkMessageElements.length === 0) {
+        const messageElements = this.findElements(parsed, 'msg');
         
-        // Fallback: try direct text content or objDescr attribute
-        if (!messageText) {
-          messageText = String(msgRecord['#text'] || msgRecord['@_objDescr'] || msg);
-        }
-        
-        messages.push({
-          line,
-          column,
-          type,
-          message: messageText
-        });
-        
-        if (type === 'error') {
-          hasErrors = true;
+        for (const msg of messageElements) {
+          const msgRecord = msg as Record<string, unknown>;
+          
+          // Get message type: E=error, W=warning, I=info
+          const msgType = String(msgRecord['@_type'] || 'I');
+          const type = msgType === 'E' ? 'error' : msgType === 'W' ? 'warning' : 'info';
+          
+          // Get line number from line attribute or parse from href
+          let line: number | undefined;
+          let column: number | undefined;
+          
+          // First try the line attribute
+          if (msgRecord['@_line']) {
+            line = parseInt(String(msgRecord['@_line']), 10);
+          }
+          
+          // Also try to parse from href which contains more precise location
+          // Format: href="...#start=295,2;end=295,10"
+          const href = String(msgRecord['@_href'] || '');
+          const hrefMatch = href.match(/#start=(\d+),(\d+)/);
+          if (hrefMatch) {
+            line = parseInt(hrefMatch[1], 10);
+            column = parseInt(hrefMatch[2], 10);
+          }
+          
+          // Get message text from shortText/txt element
+          let messageText = '';
+          const shortText = msgRecord['shortText'] as Record<string, unknown> | undefined;
+          if (shortText) {
+            const txt = shortText['txt'];
+            if (txt && typeof txt === 'object' && '#text' in (txt as object)) {
+              messageText = String((txt as Record<string, unknown>)['#text']);
+            } else if (typeof txt === 'string') {
+              messageText = txt;
+            } else {
+              messageText = String(txt || '');
+            }
+          }
+          
+          // Fallback: try direct text content or objDescr attribute
+          if (!messageText) {
+            messageText = String(msgRecord['#text'] || msgRecord['@_objDescr'] || msg);
+          }
+          
+          messages.push({
+            line,
+            column,
+            type,
+            message: messageText
+          });
+          
+          if (type === 'error') {
+            hasErrors = true;
+          }
         }
       }
 

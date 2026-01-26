@@ -315,6 +315,11 @@ export function createErrorFromResponse(
     case 401:
       return new AuthenticationError('Authentication required', details);
     case 403:
+      // Check if this is a CSRF token validation failure
+      // CSRF token failures should be retryable (CSRFTokenError has isRetryable=true)
+      if (typeof body === 'string' && body.includes('CSRF token validation failed')) {
+        return new CSRFTokenError('CSRF token validation failed', details);
+      }
       return new AuthenticationError('Access forbidden', details);
     case 404:
       return new ADTError('Resource not found', ErrorCodes.ADT_OBJECT_NOT_FOUND, statusCode, details);

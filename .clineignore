@@ -1,2 +1,4 @@
 pos/
 backup/
+adt_api/discovery-*
+adt_api/adt-api-reference.md

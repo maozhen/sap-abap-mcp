@@ -201,6 +201,41 @@ export class MCPToolTestClient {
         return this.ddicHandler.activateDDICObject(mappedArgs as any);
       },
     });
+    
+    this.tools.set('delete_ddic_object', {
+      handler: (args) => {
+        const mappedArgs = {
+          ...args,
+          name: args.name as string,
+        };
+        return this.ddicHandler.deleteDDICObject(mappedArgs as any);
+      },
+    });
+    
+    this.tools.set('update_structure', {
+      handler: (args) => {
+        const mappedArgs = this.mapArgs<Record<string, unknown>>(args);
+        // Map components 'type' to 'dataElement' (MCP schema uses 'type', handler expects 'dataElement')
+        if (Array.isArray(mappedArgs.components)) {
+          mappedArgs.components = (mappedArgs.components as Array<Record<string, unknown>>).map(comp => {
+            const mappedComp = { ...comp };
+            if ('type' in comp && !('dataElement' in comp)) {
+              mappedComp.dataElement = comp.type;
+              delete mappedComp.type;
+            }
+            return mappedComp;
+          });
+        }
+        return this.ddicHandler.updateStructure(mappedArgs as any);
+      },
+    });
+    
+    this.tools.set('update_database_table', {
+      handler: (args) => {
+        const mappedArgs = this.mapArgs<Record<string, unknown>>(args);
+        return this.ddicHandler.updateDatabaseTable(mappedArgs as any);
+      },
+    });
   }
 
   private registerProgramTools(): void {

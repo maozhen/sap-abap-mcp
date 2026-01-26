@@ -208,6 +208,42 @@ async function main(): Promise<void> {
     }
   );
   
+  await runner.runToolTest(
+    'Update Structure via MCP',
+    'update_structure',
+    {
+      name: structureName,
+      description: 'Test structure updated via MCP tool',
+      components: [
+        { name: 'FIELD1', type: dataElementName },
+        { name: 'FIELD2', type: dataElementName },
+        { name: 'FIELD3', type: dataElementName },  // Add new field
+      ],
+      package: PACKAGE_NAME,
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  await runner.runToolTest(
+    'Activate Updated Structure via MCP',
+    'activate_ddic_object',
+    {
+      objectType: 'STRU',
+      objectName: structureName,
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
   // ============================================
   // Table Type Tests (create_table_type)
   // ============================================
@@ -315,6 +351,129 @@ async function main(): Promise<void> {
     {
       objectType: 'TABL',
       objectName: tableName,
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  await runner.runToolTest(
+    'Update Database Table via MCP',
+    'update_database_table',
+    {
+      name: tableName,
+      description: 'Test table updated via MCP tool',
+      deliveryClass: 'A',
+      fields: [
+        { name: 'CLIENT', dataElement: 'MANDT', isKey: true, isNotNull: true },
+        { name: 'ID', dataElement: dataElementName, isKey: true, isNotNull: true },
+        { name: 'VALUE', dataElement: 'CHAR10', isKey: false, isNotNull: false },
+        { name: 'STATUS', dataElement: 'CHAR1', isKey: false, isNotNull: false },  // Add new field
+      ],
+      package: PACKAGE_NAME,
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  await runner.runToolTest(
+    'Activate Updated Database Table via MCP',
+    'activate_ddic_object',
+    {
+      objectType: 'TABL',
+      objectName: tableName,
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  // ============================================
+  // Delete Tests (delete_ddic_object)
+  // Delete in reverse dependency order:
+  // Table Type -> Database Table -> Structure -> Data Element -> Domain
+  // ============================================
+  
+  log('\n' + '─'.repeat(40), 'cyan');
+  log('DELETE TESTS', 'cyan');
+  log('─'.repeat(40), 'cyan');
+  
+  await runner.runToolTest(
+    'Delete Table Type via MCP',
+    'delete_ddic_object',
+    {
+      name: tableTypeName,
+      objectType: 'TTYP',
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  await runner.runToolTest(
+    'Delete Database Table via MCP',
+    'delete_ddic_object',
+    {
+      name: tableName,
+      objectType: 'TABL',
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  await runner.runToolTest(
+    'Delete Structure via MCP',
+    'delete_ddic_object',
+    {
+      name: structureName,
+      objectType: 'STRU',
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  await runner.runToolTest(
+    'Delete Data Element via MCP',
+    'delete_ddic_object',
+    {
+      name: dataElementName,
+      objectType: 'DTEL',
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  await runner.runToolTest(
+    'Delete Domain via MCP',
+    'delete_ddic_object',
+    {
+      name: domainName,
+      objectType: 'DOMA',
     },
     (response) => {
       const data = response.data as any;

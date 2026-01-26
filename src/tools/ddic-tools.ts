@@ -69,6 +69,37 @@ export interface DeleteDDICObjectInput {
   transportRequest?: string;
 }
 
+export interface UpdateStructureInput {
+  name: string;
+  description?: string;
+  components: Array<{
+    name: string;
+    dataElement?: string;
+    dataType?: string;
+    length?: number;
+    decimals?: number;
+    description?: string;
+  }>;
+  includeStructures?: string[];
+  transportRequest?: string;
+}
+
+export interface UpdateTableInput {
+  name: string;
+  description?: string;
+  fields: Array<{
+    name: string;
+    dataElement?: string;
+    dataType?: string;
+    length?: number;
+    decimals?: number;
+    isKey?: boolean;
+    isNotNull?: boolean;
+  }>;
+  deliveryClass?: 'A' | 'C' | 'L' | 'G' | 'E' | 'S' | 'W';
+  transportRequest?: string;
+}
+
 const DDIC_URI_PREFIXES: Record<string, string> = {
   DTEL: '/ddic/dataelements',
   DOMA: '/ddic/domains',
@@ -184,9 +215,12 @@ export class DDICToolHandler {
 
   /**
    * Create a new structure
-   * Uses two-step approach like Database Table:
+   * Two-step approach (same as Database Table):
    * 1. POST to create basic structure (metadata only)
    * 2. Lock -> updateObjectSource -> unlock to set DDL source with components
+   * 
+   * Note: SAP ADT ignores the 'source' element in single-step creation,
+   * creating a placeholder component instead. Must use two-step approach.
    */
   async createStructure(args: CreateStructureInput): Promise<ToolResponse<Structure>> {
     this.logger.info(`Creating structure: ${args.name}`);
@@ -196,16 +230,14 @@ export class DDICToolHandler {
 
     try {
       // Step 1: Create basic structure (metadata only, no components)
-      const requestXml = this.buildStructureMetadataXML(args);
-      this.logger.debug(`Structure creation XML:\n${requestXml}`);
+      const requestXml = this.buildStructureMetadataOnlyXML(args);
+      this.logger.info(`Structure creation request:\n  URL: ${collectionUri}\n  XML:\n${requestXml}`);
       
-      // Use application/* Content-Type as per reference library (abap-adt-api)
-      // Specific Content-Types like structures.v2+xml cause HTTP 400 errors
       await this.adtClient.post(collectionUri, requestXml, {
         headers: { 'Content-Type': 'application/*' },
         params: args.transportRequest ? { corrNr: args.transportRequest } : undefined,
       });
-      this.logger.info(`Structure ${args.name} basic structure created`);
+      this.logger.info(`Structure ${args.name} basic metadata created`);
 
       // Step 2: Update source with complete DDL (including components)
       const ddlSource = this.buildStructureDDLSource(args);
@@ -222,7 +254,7 @@ export class DDICToolHandler {
       this.logger.debug(`Structure ${args.name} unlocked`);
 
       const structure = this.parseStructureResponse('', args);
-      this.logger.info(`Structure ${args.name} created successfully with ${args.components.length} components`);
+      this.logger.info(`Structure ${args.name} created with ${args.components.length} components`);
       return { success: true, data: structure };
     } catch (error) {
       this.logger.error(`Failed to create structure ${args.name}`, error);
@@ -236,6 +268,138 @@ export class DDICToolHandler {
    * Unlike Database Table and Structure, Table Type doesn't support source/main endpoint
    * All information (lineType, accessMode, keyKind) is included in the metadata XML
    */
+  /**
+   * Update an existing structure
+   * Uses lock -> updateObjectSource -> unlock pattern
+   * Note: Only updates the DDL source (components), not metadata
+   */
+  async updateStructure(args: UpdateStructureInput): Promise<ToolResponse<Structure>> {
+    this.logger.info(`Updating structure: ${args.name}`);
+    const objectUri = `${DDIC_URI_PREFIXES.STRU}/${args.name.toLowerCase()}`;
+    const sourceUri = `${objectUri}/source/main`;
+
+    try {
+      // Get existing object to retrieve current description if not provided
+      let description = args.description;
+      if (!description) {
+        const existingResult = await this.getDDICObject({ name: args.name, objectType: 'STRU' });
+        if (existingResult.success && existingResult.data) {
+          description = existingResult.data.description || 'Updated structure';
+        } else {
+          description = 'Updated structure';
+        }
+      }
+
+      // Build update args with description for DDL source
+      const updateArgs: CreateStructureInput = {
+        name: args.name,
+        description,
+        components: args.components,
+        includeStructures: args.includeStructures,
+        packageName: '', // Not needed for update
+        transportRequest: args.transportRequest,
+      };
+
+      // Build new DDL source
+      const ddlSource = this.buildStructureDDLSource(updateArgs);
+      this.logger.debug(`Structure update DDL source:\n${ddlSource}`);
+
+      // Lock, update source, unlock
+      const lock = await this.adtClient.lockObject(objectUri);
+      this.logger.debug(`Structure ${args.name} locked with handle: ${lock.lockHandle}`);
+      
+      await this.adtClient.updateObjectSource(sourceUri, ddlSource, lock.lockHandle);
+      this.logger.info(`Structure ${args.name} DDL source updated`);
+      
+      await this.adtClient.unlockObject(objectUri, lock.lockHandle);
+      this.logger.debug(`Structure ${args.name} unlocked`);
+
+      const structure = this.parseStructureResponse('', updateArgs);
+      this.logger.info(`Structure ${args.name} updated successfully with ${args.components.length} components`);
+      return { success: true, data: structure };
+    } catch (error) {
+      this.logger.error(`Failed to update structure ${args.name}`, error);
+      return this.createErrorResponse('UPDATE_STRU_FAILED', `Failed to update structure: ${error}`, error);
+    }
+  }
+
+  /**
+   * Update an existing database table
+   * Uses lock -> updateObjectSource -> unlock pattern
+   * Note: Only updates the DDL source (fields), not metadata
+   */
+  async updateDatabaseTable(args: UpdateTableInput): Promise<ToolResponse<DatabaseTable>> {
+    this.logger.info(`Updating database table: ${args.name}`);
+    const objectUri = `${DDIC_URI_PREFIXES.TABL}/${args.name.toLowerCase()}`;
+    const sourceUri = `${objectUri}/source/main`;
+
+    try {
+      // Get existing object to retrieve current description and deliveryClass if not provided
+      let description = args.description;
+      let deliveryClass = args.deliveryClass;
+      if (!description || !deliveryClass) {
+        const existingResult = await this.getDDICObject({ name: args.name, objectType: 'TABL' });
+        if (existingResult.success && existingResult.data) {
+          if (!description) {
+            description = existingResult.data.description || 'Updated table';
+          }
+          // Try to get deliveryClass from existing table's source
+          if (!deliveryClass) {
+            const extendedData = existingResult.data as ADTObject & { source?: string };
+            if (extendedData.source) {
+              const deliveryMatch = extendedData.source.match(/@AbapCatalog\.deliveryClass\s*:\s*#(\w)/);
+              if (deliveryMatch) {
+                deliveryClass = deliveryMatch[1] as 'A' | 'C' | 'L' | 'G' | 'E' | 'S' | 'W';
+              }
+            }
+          }
+        }
+        if (!description) {
+          description = 'Updated table';
+        }
+        if (!deliveryClass) {
+          deliveryClass = 'A'; // Default to Application table
+        }
+      }
+
+      // Build update args with description for DDL source
+      // Map fields to ensure isKey and isNotNull have default boolean values
+      const updateArgs: CreateTableInput = {
+        name: args.name,
+        description,
+        deliveryClass,
+        fields: args.fields.map(f => ({
+          ...f,
+          isKey: f.isKey ?? false,
+          isNotNull: f.isNotNull ?? false,
+        })),
+        packageName: '', // Not needed for update
+        transportRequest: args.transportRequest,
+      };
+
+      // Build new DDL source
+      const ddlSource = this.buildTableDDLSource(updateArgs);
+      this.logger.debug(`Table update DDL source:\n${ddlSource}`);
+
+      // Lock, update source, unlock
+      const lock = await this.adtClient.lockObject(objectUri);
+      this.logger.debug(`Table ${args.name} locked with handle: ${lock.lockHandle}`);
+      
+      await this.adtClient.updateObjectSource(sourceUri, ddlSource, lock.lockHandle);
+      this.logger.info(`Table ${args.name} DDL source updated`);
+      
+      await this.adtClient.unlockObject(objectUri, lock.lockHandle);
+      this.logger.debug(`Table ${args.name} unlocked`);
+
+      const table = this.parseTableResponse('', updateArgs);
+      this.logger.info(`Database table ${args.name} updated successfully with ${args.fields.length} fields`);
+      return { success: true, data: table };
+    } catch (error) {
+      this.logger.error(`Failed to update database table ${args.name}`, error);
+      return this.createErrorResponse('UPDATE_TABL_FAILED', `Failed to update database table: ${error}`, error);
+    }
+  }
+
   async createTableType(args: CreateTableTypeInput): Promise<ToolResponse<TableType>> {
     this.logger.info(`Creating table type: ${args.name}`);
     const collectionUri = DDIC_URI_PREFIXES.TTYP;
@@ -738,10 +902,70 @@ ${fieldDefinitions}
   }
 
   /**
-   * Build structure metadata XML (Step 1: Create basic structure without source)
+   * Build structure XML with complete DDL source (Single-step creation)
+   * SAP ADT Structure API doesn't support /source/main endpoint
+   * All information including DDL source must be included in the creation request
+   * Uses blueSource element with http://www.sap.com/wbobj/blue namespace
+   * 
+   * IMPORTANT: Based on exploration of existing structure BAPIRET2:
+   * - Type code must be 'TABL/DS' (Dictionary Structure), NOT 'STRU/I'
+   * - DDL source must include @AbapCatalog.enhancement.category annotation
+   */
+  private buildStructureWithSourceXML(args: CreateStructureInput): string {
+    // SAP ADT expects namespace: http://www.sap.com/wbobj/blue with element 'blueSource'
+    // Include the 'source' element with complete DDL
+    const ddlSource = this.buildStructureDDLSource(args);
+    
+    const obj = {
+      'blueSource': {
+        '@_xmlns': 'http://www.sap.com/wbobj/blue',
+        '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
+        '@_adtcore:description': args.description,
+        '@_adtcore:language': 'EN',
+        '@_adtcore:name': args.name.toUpperCase(),
+        // TABL/DS = Dictionary Structure (based on BAPIRET2 metadata)
+        // STRU/I was incorrect and caused "Error while importing object" error
+        '@_adtcore:type': 'TABL/DS',
+        '@_adtcore:masterLanguage': 'EN',
+        'adtcore:packageRef': {
+          '@_adtcore:name': args.packageName,
+        },
+        'source': ddlSource,
+      },
+    };
+    return buildXML(obj);
+  }
+
+  /**
+   * Build structure metadata-only XML (Step 1: Create basic structure without source)
    * SAP ADT requires creating the object first, then updating its source
+   * Uses TABL/DS type code based on BAPIRET2 exploration
+   */
+  private buildStructureMetadataOnlyXML(args: CreateStructureInput): string {
+    // SAP ADT expects namespace: http://www.sap.com/wbobj/blue with element 'blueSource'
+    // For Step 1, we create the object without source content
+    const obj = {
+      'blueSource': {
+        '@_xmlns': 'http://www.sap.com/wbobj/blue',
+        '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
+        '@_adtcore:description': args.description,
+        '@_adtcore:language': 'EN',
+        '@_adtcore:name': args.name.toUpperCase(),
+        // TABL/DS = Dictionary Structure (based on BAPIRET2 metadata)
+        '@_adtcore:type': 'TABL/DS',
+        '@_adtcore:masterLanguage': 'EN',
+        'adtcore:packageRef': {
+          '@_adtcore:name': args.packageName,
+        },
+        // No 'source' element - will be set in Step 2 via updateObjectSource
+      },
+    };
+    return buildXML(obj);
+  }
+
+  /**
+   * Build structure metadata XML (legacy, with STRU/I type)
    * Uses blueSource element with http://www.sap.com/wbobj/blue namespace (same as Database Table)
-   * Error message confirmed: "System expected element '{http://www.sap.com/wbobj/blue}blueSource'"
    */
   private buildStructureMetadataXML(args: CreateStructureInput): string {
     // SAP ADT expects namespace: http://www.sap.com/wbobj/blue with element 'blueSource'
@@ -767,6 +991,10 @@ ${fieldDefinitions}
   /**
    * Build structure DDL source string (Step 2: Update source with complete DDL)
    * This is the actual DDL definition including all components
+   * 
+   * IMPORTANT: Based on exploration of existing structure BAPIRET2:
+   * - Structure DDL MUST include @AbapCatalog.enhancement.category annotation
+   * - This is different from previous assumption that it was not needed
    */
   private buildStructureDDLSource(args: CreateStructureInput): string {
     const componentDefinitions = args.components.map(comp => {
@@ -792,6 +1020,9 @@ ${fieldDefinitions}
     // Include structures if specified
     const includeStatements = args.includeStructures?.map(s => `  include ${s.toLowerCase()};`).join('\n') || '';
 
+    // Structure DDL format based on BAPIRET2 source:
+    // - @EndUserText.label annotation is required
+    // - @AbapCatalog.enhancement.category annotation is required (NOT_EXTENSIBLE)
     return `@EndUserText.label : '${args.description}'
 @AbapCatalog.enhancement.category : #NOT_EXTENSIBLE
 define structure ${args.name.toLowerCase()} {

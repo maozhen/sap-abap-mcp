@@ -139,6 +139,30 @@ async function main(): Promise<void> {
   const tableTypeName = `${TEST_PREFIX}TT_TEST`;
   
   // ============================================
+  // Cleanup existing test objects (in reverse dependency order)
+  // ============================================
+  log('\nCleaning up existing test objects...', 'yellow');
+  
+  // Helper function to safely delete an object
+  async function cleanupObject(objectType: 'DOMA' | 'DTEL' | 'STRU' | 'TTYP' | 'TABL', name: string): Promise<void> {
+    try {
+      await ddicHandler.deleteDDICObject({ objectType, name });
+      log(`  Deleted ${objectType}/${name}`, 'gray');
+    } catch (error) {
+      // Ignore errors - object might not exist
+    }
+  }
+  
+  // Delete in reverse dependency order: Table Type -> Table -> Structure -> Data Element -> Domain
+  await cleanupObject('TTYP', tableTypeName);
+  await cleanupObject('TABL', tableName);
+  await cleanupObject('STRU', structureName);
+  await cleanupObject('DTEL', dataElementName);
+  await cleanupObject('DOMA', domainName);
+  
+  log('Cleanup complete.\n', 'yellow');
+  
+  // ============================================
   // Domain Tests
   // ============================================
   
@@ -349,6 +373,53 @@ async function main(): Promise<void> {
     log(`  Structure ${structureName} activated and verified`, 'gray');
   });
   
+  await runTest('Update Structure', async () => {
+    // Update structure by adding a new component
+    const result = await ddicHandler.updateStructure({
+      name: structureName,
+      components: [
+        { name: 'FIELD1', dataElement: dataElementName },
+        { name: 'FIELD2', dataType: 'CHAR', length: 10 },
+        { name: 'FIELD3', dataType: 'NUMC', length: 5 },  // New field
+      ],
+    });
+    
+    if (!result.success) {
+      throw new Error(`Update failed: ${result.error?.message}`);
+    }
+    
+    // Read back to verify the update
+    const readResult = await ddicHandler.getDDICObject({
+      objectType: 'STRU',
+      name: structureName,
+    });
+    
+    if (!readResult.success) {
+      throw new Error(`Read back after update failed: ${readResult.error?.message}`);
+    }
+    
+    // Verify the new field exists in the source
+    const extendedData = readResult.data as { source?: string };
+    if (!extendedData.source?.includes('field3')) {
+      throw new Error('New field FIELD3 not found in updated structure source');
+    }
+    
+    log(`  Structure ${structureName} updated with new field FIELD3`, 'gray');
+  });
+  
+  await runTest('Activate Structure After Update', async () => {
+    const result = await ddicHandler.activateDDICObject({
+      objectType: 'STRU',
+      name: structureName,
+    });
+    
+    if (!result.success) {
+      throw new Error(`Activation after update failed: ${result.error?.message}`);
+    }
+    
+    log(`  Structure ${structureName} activated after update`, 'gray');
+  });
+  
   // ============================================
   // Table Type Tests
   // ============================================
@@ -492,6 +563,54 @@ async function main(): Promise<void> {
     }
     
     log(`  Table ${tableName} activated and verified`, 'gray');
+  });
+  
+  await runTest('Update Database Table', async () => {
+    // Update table by adding a new field
+    const result = await ddicHandler.updateDatabaseTable({
+      name: tableName,
+      fields: [
+        { name: 'CLIENT', dataElement: 'MANDT', isKey: true, isNotNull: true },
+        { name: 'ID', dataElement: dataElementName, isKey: true, isNotNull: true },
+        { name: 'VALUE', dataType: 'CHAR', length: 10, isKey: false, isNotNull: false },
+        { name: 'STATUS', dataType: 'CHAR', length: 1, isKey: false, isNotNull: false },  // New field
+      ],
+    });
+    
+    if (!result.success) {
+      throw new Error(`Update failed: ${result.error?.message}`);
+    }
+    
+    // Read back to verify the update
+    const readResult = await ddicHandler.getDDICObject({
+      objectType: 'TABL',
+      name: tableName,
+    });
+    
+    if (!readResult.success) {
+      throw new Error(`Read back after update failed: ${readResult.error?.message}`);
+    }
+    
+    // Verify the new field exists in the source
+    const extendedData = readResult.data as { source?: string };
+    if (!extendedData.source?.includes('status')) {
+      throw new Error('New field STATUS not found in updated table source');
+    }
+    
+    log(`  Table ${tableName} updated with new field STATUS`, 'gray');
+  });
+  
+  await runTest('Activate Database Table After Update', async () => {
+    const result = await ddicHandler.activateDDICObject({
+      objectType: 'TABL',
+      name: tableName,
+    });
+    
+    if (!result.success) {
+      throw new Error(`Activation after update failed: ${result.error?.message}`);
+    }
+    
+    log(`  Table ${tableName} activated after update`, 'gray');
   });
   
   // Print summary

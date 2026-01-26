@@ -80,7 +80,7 @@ interface DiscoveryResult {
 // Configuration
 // ============================================
 
-const OUTPUT_DIR = path.join(process.cwd(), 'adt_api');
+const OUTPUT_DIR = path.join('..', 'adt_api');
 const MAX_DEPTH = 3; // Maximum recursion depth for API exploration
 const EXPLORE_DELAY_MS = 100; // Delay between API calls to avoid overwhelming the server
 
