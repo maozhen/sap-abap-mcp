@@ -1291,21 +1291,43 @@ export class ProgramToolHandler {
 
     try {
       const parsed = parseXML<Record<string, unknown>>(xml);
-      const references = this.findElements(parsed, 'objectReference');
+      
+      // The API returns referencedObject elements, each containing an adtObject
+      // Structure: referencedObjects/referencedObject/adtObject
+      const referencedObjects = this.findElements(parsed, 'referencedObject');
 
-      for (const ref of references) {
-        if (typeof ref === 'object' && ref !== null) {
-          const refObj = ref as Record<string, unknown>;
-          entries.push({
-            objectName: (getAttribute(refObj, 'name') || '').toString(),
-            objectType: (getAttribute(refObj, 'type') || 'PROG') as ADTObjectType,
-            uri: (getAttribute(refObj, 'uri') || '').toString(),
-            usageType: (getAttribute(refObj, 'usageType') || 'reference').toString(),
-            line: getAttribute(refObj, 'line') ? parseInt(getAttribute(refObj, 'line') || '0', 10) : undefined,
-            column: getAttribute(refObj, 'column') ? parseInt(getAttribute(refObj, 'column') || '0', 10) : undefined,
-          });
+      for (const refObj of referencedObjects) {
+        if (typeof refObj === 'object' && refObj !== null) {
+          const refRecord = refObj as Record<string, unknown>;
+          
+          // Get URI from referencedObject element
+          const uri = getAttribute(refRecord, 'uri') || '';
+          const usageInfo = getAttribute(refRecord, 'usageInformation') || 'reference';
+          
+          // Find the nested adtObject element which contains name and type
+          const adtObjects = this.findElements(refRecord, 'adtObject');
+          
+          if (adtObjects.length > 0) {
+            const adtObj = adtObjects[0] as Record<string, unknown>;
+            const name = getAttribute(adtObj, 'name') || '';
+            const type = getAttribute(adtObj, 'type') || 'PROG';
+            
+            // Extract the base object type (e.g., "DDLS/DF" -> "DDLS")
+            const baseType = type.split('/')[0] as ADTObjectType;
+            
+            entries.push({
+              objectName: name,
+              objectType: baseType,
+              uri: uri,
+              usageType: usageInfo,
+              line: undefined,
+              column: undefined,
+            });
+          }
         }
       }
+      
+      this.logger.debug(`Parsed ${entries.length} where used entries from response`);
     } catch (error) {
       this.logger.warn(`Failed to parse where used response: ${error}`);
     }

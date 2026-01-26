@@ -1,0 +1,259 @@
+[
+  {
+    "path": "/core/discovery",
+    "children": [
+      {
+        "path": "/sap/bc/adt/compatibility/graph",
+        "title": "Compatibility graph",
+        "categories": [
+          {
+            "term": "graph",
+            "scheme": "http://www.sap.com/adt/categories/compatibility"
+          }
+        ],
+        "templateLinks": [],
+        "contentTypes": []
+      },
+      {
+        "path": "/sap/bc/apc/sap/adt",
+        "title": "APC Endpoint",
+        "categories": [
+          {
+            "term": "pushchannel",
+            "scheme": "http://www.sap.com/adt/categories/system/communication/services"
+          }
+        ],
+        "templateLinks": [
+          {
+            "template": "wss://rsc-079-adm.wdf.sap.corp:443/sap/bc/apc/sap/adt?channel=amc://system_channels/progress_indicator&channel=amc://adt/request_scoped_messages{&connectionId}",
+            "rel": "pushchannel"
+          },
+          {
+            "template": "wss://{+uriAuthority}/sap/bc/apc/sap/adt?channel=amc://system_channels/progress_indicator&channel=amc://adt/request_scoped_messages{&connectionId}",
+            "rel": "pushchannel-variable-uri-authority"
+          }
+        ],
+        "contentTypes": []
+      },
+      {
+        "path": "/sap/bc/adt/communication/batch",
+        "title": "ADT Batch Resource",
+        "categories": [
+          {
+            "term": "batch",
+            "scheme": "http://www.sap.com/adt/categories/system/communication/services"
+          }
+        ],
+        "templateLinks": [],
+        "contentTypes": [
+          "multipart/mixed"
+        ]
+      },
+      {
+        "path": "/sap/bc/adt/communication/bgruns/runs",
+        "title": "ADT Background Run Resource",
+        "categories": [
+          {
+            "term": "backgroundruns",
+            "scheme": "http://www.sap.com/adt/categories/system/communication/services"
+          }
+        ],
+        "templateLinks": [],
+        "contentTypes": [
+          "application/http"
+        ]
+      }
+    ],
+    "metadata": {
+      "?xml": {
+        "@_version": 1,
+        "@_encoding": "utf-8"
+      },
+      "app:service": {
+        "app:workspace": [
+          {
+            "atom:title": "Compatibility",
+            "app:collection": [
+              {
+                "atom:title": "Compatibility graph",
+                "atom:category": [
+                  {
+                    "@_term": "graph",
+                    "@_scheme": "http://www.sap.com/adt/categories/compatibility"
+                  }
+                ],
+                "adtcomp:templateLinks": {
+                  "@_xmlns:adtcomp": "http://www.sap.com/adt/compatibility"
+                },
+                "@_href": "/sap/bc/adt/compatibility/graph"
+              }
+            ]
+          },
+          {
+            "atom:title": "Push Channel",
+            "app:collection": [
+              {
+                "atom:title": "APC Endpoint",
+                "atom:category": [
+                  {
+                    "@_term": "pushchannel",
+                    "@_scheme": "http://www.sap.com/adt/categories/system/communication/services"
+                  }
+                ],
+                "adtcomp:templateLinks": {
+                  "adtcomp:templateLink": [
+                    {
+                      "@_rel": "pushchannel",
+                      "@_template": "wss://rsc-079-adm.wdf.sap.corp:443/sap/bc/apc/sap/adt?channel=amc://system_channels/progress_indicator&channel=amc://adt/request_scoped_messages{&connectionId}"
+                    },
+                    {
+                      "@_rel": "pushchannel-variable-uri-authority",
+                      "@_template": "wss://{+uriAuthority}/sap/bc/apc/sap/adt?channel=amc://system_channels/progress_indicator&channel=amc://adt/request_scoped_messages{&connectionId}"
+                    }
+                  ],
+                  "@_xmlns:adtcomp": "http://www.sap.com/adt/compatibility"
+                },
+                "@_href": "/sap/bc/apc/sap/adt"
+              }
+            ]
+          },
+          {
+            "atom:title": "ADT Batch Resource",
+            "app:collection": [
+              {
+                "atom:title": "ADT Batch Resource",
+                "app:accept": "multipart/mixed",
+                "atom:category": [
+                  {
+                    "@_term": "batch",
+                    "@_scheme": "http://www.sap.com/adt/categories/system/communication/services"
+                  }
+                ],
+                "adtcomp:templateLinks": {
+                  "@_xmlns:adtcomp": "http://www.sap.com/adt/compatibility"
+                },
+                "@_href": "/sap/bc/adt/communication/batch"
+              }
+            ]
+          },
+          {
+            "atom:title": "ADT Background Run Resources",
+            "app:collection": [
+              {
+                "atom:title": "ADT Background Run Resource",
+                "app:accept": "application/http",
+                "atom:category": [
+                  {
+                    "@_term": "backgroundruns",
+                    "@_scheme": "http://www.sap.com/adt/categories/system/communication/services"
+                  }
+                ],
+                "adtcomp:templateLinks": {
+                  "@_xmlns:adtcomp": "http://www.sap.com/adt/compatibility"
+                },
+                "@_href": "/sap/bc/adt/communication/bgruns/runs"
+              }
+            ]
+          }
+        ],
+        "@_xmlns:app": "http://www.w3.org/2007/app",
+        "@_xmlns:atom": "http://www.w3.org/2005/Atom"
+      }
+    },
+    "contentTypes": [
+      "application/atomsvc+xml"
+    ]
+  },
+  {
+    "path": "/repository/informationsystem/search",
+    "children": [],
+    "description": "GET not supported: Request failed: Parameter ris_request_type could not be found."
+  },
+  {
+    "path": "/activation",
+    "children": [],
+    "description": "GET not supported: Request failed: Resource controller does not support method GET"
+  },
+  {
+    "path": "/cts/transportrequests",
+    "children": [],
+    "metadata": {
+      "?xml": {
+        "@_version": 1,
+        "@_encoding": "utf-8"
+      },
+      "tm:root": {
+        "@_adtcore:name": "MAOZH",
+        "@_adtcore:changedAt": "2026-01-26T01:58:28Z",
+        "@_adtcore:createdAt": "2026-01-26T01:58:28Z",
+        "@_adtcore:changedBy": "MAOZH",
+        "@_adtcore:createdBy": "MAOZH",
+        "@_xmlns:tm": "http://www.sap.com/cts/adt/tm",
+        "@_xmlns:adtcore": "http://www.sap.com/adt/core"
+      }
+    },
+    "contentTypes": [
+      "application/vnd.sap.adt.transportorganizertree.v1+xml; charset=utf-8"
+    ]
+  },
+  {
+    "path": "/programs/programs",
+    "children": [],
+    "description": "GET not supported: Request failed: Parameter programname could not be found."
+  },
+  {
+    "path": "/oo/classes",
+    "children": [],
+    "description": "GET not supported: Request failed: Parameter classname could not be found."
+  },
+  {
+    "path": "/oo/interfaces",
+    "children": [],
+    "description": "GET not supported: Request failed: Parameter interfacename could not be found."
+  },
+  {
+    "path": "/functions/groups",
+    "children": [],
+    "description": "GET not supported: Request failed: Parameter groupname could not be found."
+  },
+  {
+    "path": "/ddic/domains",
+    "children": [],
+    "description": "GET not supported: Request failed: URI-Mapping cannot be performed due to invalid URI: /sap/bc/adt/ddic/domains"
+  },
+  {
+    "path": "/ddic/dataelements",
+    "children": [],
+    "description": "GET not supported: Request failed: URI-Mapping cannot be performed due to invalid URI: /sap/bc/adt/ddic/dataelements"
+  },
+  {
+    "path": "/ddic/tables",
+    "children": [],
+    "description": "GET not supported: Request failed: URI-Mapping cannot be performed due to invalid URI: /sap/bc/adt/ddic/tables"
+  },
+  {
+    "path": "/ddic/structures",
+    "children": [],
+    "description": "GET not supported: Request failed: URI-Mapping cannot be performed due to invalid URI: /sap/bc/adt/ddic/structures"
+  },
+  {
+    "path": "/ddic/tabletypes",
+    "children": [],
+    "description": "GET not supported: Request failed: URI-Mapping cannot be performed due to invalid URI: /sap/bc/adt/ddic/tabletypes"
+  },
+  {
+    "path": "/ddls/sources",
+    "children": [],
+    "description": "GET not supported: Resource not found"
+  },
+  {
+    "path": "/srvd/sources",
+    "children": [],
+    "description": "GET not supported: Resource not found"
+  },
+  {
+    "path": "/srvb/bindings",
+    "children": [],
+    "description": "GET not supported: Resource not found"
+  }
+]
