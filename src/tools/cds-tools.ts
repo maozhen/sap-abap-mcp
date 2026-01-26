@@ -71,6 +71,12 @@ export interface GetServiceBindingUrlInput {
   name: string;
 }
 
+export interface DeleteCDSObjectInput {
+  name: string;
+  objectType: 'DDLS' | 'DCLS' | 'DDLX' | 'SRVD' | 'SRVB';
+  transportRequest?: string;
+}
+
 // ============================================================================
 // URI Prefixes
 // ============================================================================
@@ -102,30 +108,47 @@ export class CDSToolHandler {
 
   /**
    * Create a new CDS view
+   * Uses two-step approach like Database Table:
+   * 1. POST to collection URL to create basic CDS view (metadata only)
+   * 2. Lock -> updateObjectSource -> unlock to set DDL source
+   * 
+   * Note: SAP ADT requires POST to collection URL (/ddic/ddl/sources), 
+   * not object URL (/ddic/ddl/sources/{name})
    */
   async createCDSView(args: CreateCDSViewInput): Promise<ToolResponse<CDSView>> {
     this.logger.info(`Creating CDS view: ${args.name}`);
-    const uri = `${CDS_URI_PREFIXES.DDLS}/${args.name.toLowerCase()}`;
+    // POST to collection URL, not object URL (same pattern as Domain/DataElement/Table)
+    const collectionUri = CDS_URI_PREFIXES.DDLS;
+    const objectUri = `${CDS_URI_PREFIXES.DDLS}/${args.name.toLowerCase()}`;
 
     try {
+      // Step 1: Create basic CDS view (metadata only)
       const requestXml = this.buildCDSViewXML(args);
-      const response = await this.adtClient.post(uri, requestXml, {
-        headers: { 'Content-Type': 'application/vnd.sap.adt.ddic.ddl.sources.v2+xml' },
+      this.logger.debug(`CDS view creation XML:\n${requestXml}`);
+      
+      await this.adtClient.post(collectionUri, requestXml, {
+        headers: { 'Content-Type': 'application/vnd.sap.adt.ddlSource+xml' },
         params: args.transportRequest ? { corrNr: args.transportRequest } : undefined,
       });
+      this.logger.info(`CDS view ${args.name} basic structure created`);
 
-      // If source code is provided, update it after creation
+      // Step 2: If source code is provided, update it after creation
       if (args.sourceCode) {
         try {
-          const lockHandle = await this.adtClient.lockObject(uri);
-          await this.adtClient.updateObjectSource(uri, args.sourceCode, lockHandle.lockHandle);
-          await this.adtClient.unlockObject(uri, lockHandle.lockHandle);
+          const lockHandle = await this.adtClient.lockObject(objectUri);
+          this.logger.debug(`CDS view ${args.name} locked with handle: ${lockHandle.lockHandle}`);
+          
+          await this.adtClient.updateObjectSource(objectUri, args.sourceCode, lockHandle.lockHandle);
+          this.logger.info(`CDS view ${args.name} source updated`);
+          
+          await this.adtClient.unlockObject(objectUri, lockHandle.lockHandle);
+          this.logger.debug(`CDS view ${args.name} unlocked`);
         } catch (sourceError) {
           this.logger.warn(`CDS view created but failed to set source: ${sourceError}`);
         }
       }
 
-      const cdsView = this.parseCDSViewResponse(response.raw || '', args);
+      const cdsView = this.parseCDSViewResponse('', args);
       this.logger.info(`CDS view ${args.name} created successfully`);
       return { success: true, data: cdsView };
     } catch (error) {
@@ -136,30 +159,47 @@ export class CDSToolHandler {
 
   /**
    * Create a new service definition
+   * Uses two-step approach:
+   * 1. POST to collection URL to create basic service definition (metadata only)
+   * 2. Lock -> updateObjectSource -> unlock to set source
+   * 
+   * Note: SAP ADT requires POST to collection URL (/ddic/srvd/sources), 
+   * not object URL (/ddic/srvd/sources/{name})
    */
   async createServiceDefinition(args: CreateServiceDefinitionInput): Promise<ToolResponse<ServiceDefinition>> {
     this.logger.info(`Creating service definition: ${args.name}`);
-    const uri = `${CDS_URI_PREFIXES.SRVD}/${args.name.toLowerCase()}`;
+    // POST to collection URL, not object URL
+    const collectionUri = CDS_URI_PREFIXES.SRVD;
+    const objectUri = `${CDS_URI_PREFIXES.SRVD}/${args.name.toLowerCase()}`;
 
     try {
+      // Step 1: Create basic service definition (metadata only)
       const requestXml = this.buildServiceDefinitionXML(args);
-      const response = await this.adtClient.post(uri, requestXml, {
-        headers: { 'Content-Type': 'application/vnd.sap.adt.ddic.srvd.sources.v2+xml' },
+      this.logger.debug(`Service definition creation XML:\n${requestXml}`);
+      
+      await this.adtClient.post(collectionUri, requestXml, {
+        headers: { 'Content-Type': 'application/vnd.sap.adt.srvdSource+xml' },
         params: args.transportRequest ? { corrNr: args.transportRequest } : undefined,
       });
+      this.logger.info(`Service definition ${args.name} basic structure created`);
 
-      // If source code is provided, update it after creation
+      // Step 2: If source code is provided, update it after creation
       if (args.sourceCode) {
         try {
-          const lockHandle = await this.adtClient.lockObject(uri);
-          await this.adtClient.updateObjectSource(uri, args.sourceCode, lockHandle.lockHandle);
-          await this.adtClient.unlockObject(uri, lockHandle.lockHandle);
+          const lockHandle = await this.adtClient.lockObject(objectUri);
+          this.logger.debug(`Service definition ${args.name} locked with handle: ${lockHandle.lockHandle}`);
+          
+          await this.adtClient.updateObjectSource(objectUri, args.sourceCode, lockHandle.lockHandle);
+          this.logger.info(`Service definition ${args.name} source updated`);
+          
+          await this.adtClient.unlockObject(objectUri, lockHandle.lockHandle);
+          this.logger.debug(`Service definition ${args.name} unlocked`);
         } catch (sourceError) {
           this.logger.warn(`Service definition created but failed to set source: ${sourceError}`);
         }
       }
 
-      const serviceDefinition = this.parseServiceDefinitionResponse(response.raw || '', args);
+      const serviceDefinition = this.parseServiceDefinitionResponse('', args);
       this.logger.info(`Service definition ${args.name} created successfully`);
       return { success: true, data: serviceDefinition };
     } catch (error) {
@@ -170,19 +210,27 @@ export class CDSToolHandler {
 
   /**
    * Create a new service binding
+   * Uses single-step approach:
+   * POST to collection URL to create service binding
+   * 
+   * Note: SAP ADT requires POST to collection URL (/businessservices/bindings), 
+   * not object URL (/businessservices/bindings/{name})
    */
   async createServiceBinding(args: CreateServiceBindingInput): Promise<ToolResponse<ServiceBinding>> {
     this.logger.info(`Creating service binding: ${args.name}`);
-    const uri = `${CDS_URI_PREFIXES.SRVB}/${args.name.toLowerCase()}`;
+    // POST to collection URL, not object URL
+    const collectionUri = CDS_URI_PREFIXES.SRVB;
 
     try {
       const requestXml = this.buildServiceBindingXML(args);
-      const response = await this.adtClient.post(uri, requestXml, {
-        headers: { 'Content-Type': 'application/vnd.sap.adt.businessservices.bindings.v2+xml' },
+      this.logger.debug(`Service binding creation XML:\n${requestXml}`);
+      
+      await this.adtClient.post(collectionUri, requestXml, {
+        headers: { 'Content-Type': 'application/vnd.sap.adt.businessservices.servicebinding.v2+xml' },
         params: args.transportRequest ? { corrNr: args.transportRequest } : undefined,
       });
 
-      const serviceBinding = this.parseServiceBindingResponse(response.raw || '', args);
+      const serviceBinding = this.parseServiceBindingResponse('', args);
       this.logger.info(`Service binding ${args.name} created successfully`);
       return { success: true, data: serviceBinding };
     } catch (error) {
@@ -328,6 +376,67 @@ export class CDSToolHandler {
   // Service Binding Operations
   // ==========================================================================
 
+  // ==========================================================================
+  // Delete Operations
+  // ==========================================================================
+
+  /**
+   * Delete a CDS object (DDLS, DCLS, DDLX, SRVD, SRVB)
+   * Uses lock-based deletion flow:
+   * 1. Lock the object
+   * 2. Delete with lock handle
+   * 3. Unlock if delete fails
+   */
+  async deleteCDSObject(args: DeleteCDSObjectInput): Promise<ToolResponse<void>> {
+    this.logger.info(`Deleting CDS object: ${args.objectType}/${args.name}`);
+
+    const uriPrefix = CDS_URI_PREFIXES[args.objectType];
+    if (!uriPrefix) {
+      return this.createErrorResponse('INVALID_OBJECT_TYPE', `Invalid CDS object type: ${args.objectType}`);
+    }
+
+    const uri = `${uriPrefix}/${args.name.toLowerCase()}`;
+    let lockHandle: LockHandle | undefined;
+
+    try {
+      // Step 1: Lock the object
+      lockHandle = await this.adtClient.lockObject(uri);
+      this.logger.debug(`CDS object ${args.name} locked: ${lockHandle.lockHandle}`);
+
+      // Step 2: Delete the object
+      const params: Record<string, string> = {};
+      if (args.transportRequest) {
+        params.corrNr = args.transportRequest;
+      }
+
+      await this.adtClient.delete(uri, {
+        headers: {
+          'X-sap-adt-sessiontype': 'stateful',
+        },
+        params: Object.keys(params).length > 0 ? params : undefined,
+      });
+
+      this.logger.info(`CDS object ${args.name} deleted successfully`);
+      return { success: true };
+    } catch (error) {
+      // Ensure unlock on error
+      if (lockHandle) {
+        try {
+          await this.adtClient.unlockObject(uri, lockHandle.lockHandle);
+          this.logger.debug(`CDS object ${args.name} unlocked after error`);
+        } catch (unlockError) {
+          this.logger.warn(`Failed to unlock CDS object after delete error: ${unlockError}`);
+        }
+      }
+      this.logger.error(`Failed to delete CDS object ${args.name}`, error);
+      return this.createErrorResponse('DELETE_CDS_FAILED', `Failed to delete CDS object: ${error}`, error);
+    }
+  }
+
+  // ==========================================================================
+  // Service Binding Operations
+  // ==========================================================================
+
   /**
    * Get service binding URL
    */
@@ -360,36 +469,49 @@ export class CDSToolHandler {
   // ==========================================================================
 
   private buildCDSViewXML(args: CreateCDSViewInput): string {
+    // SAP ADT expects namespace: http://www.sap.com/adt/ddic/ddlsources (plural, no slash)
+    // Package must be passed as child element, not attribute (same as DDIC objects)
     const obj = {
-      'ddl:ddlSource': {
-        '@_xmlns:ddl': 'http://www.sap.com/adt/ddic/ddl/sources',
+      'ddlSource:ddlSource': {
+        '@_xmlns:ddlSource': 'http://www.sap.com/adt/ddic/ddlsources',
         '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
         '@_adtcore:name': args.name.toUpperCase(),
         '@_adtcore:description': args.description,
-        '@_adtcore:packageRef': args.packageName,
-        ...(args.sqlViewName && { '@_ddl:sqlViewName': args.sqlViewName }),
+        '@_adtcore:masterLanguage': 'EN',
+        'adtcore:packageRef': {
+          '@_adtcore:name': args.packageName,
+        },
+        ...(args.sqlViewName && { '@_ddlSource:sqlViewName': args.sqlViewName }),
       },
     };
     return buildXML(obj);
   }
 
   private buildServiceDefinitionXML(args: CreateServiceDefinitionInput): string {
+    // SAP ADT expects namespace: http://www.sap.com/adt/ddic/srvdsources (plural, no slash)
+    // Package must be passed as child element, not attribute (same as DDIC objects)
+    // serviceDefinitionType attribute needs namespace prefix: srvdSource:serviceDefinitionType
+    // Valid values: ODATA, WEBAPI, etc.
     const exposedEntitiesXml = args.exposedEntities.map(entity => ({
-      '@_srvd:entityName': entity.entityName,
-      ...(entity.alias && { '@_srvd:alias': entity.alias }),
-      ...(entity.repositoryName && { '@_srvd:repositoryName': entity.repositoryName }),
+      '@_srvdSource:entityName': entity.entityName,
+      ...(entity.alias && { '@_srvdSource:alias': entity.alias }),
+      ...(entity.repositoryName && { '@_srvdSource:repositoryName': entity.repositoryName }),
     }));
 
     const obj = {
-      'srvd:srvdSource': {
-        '@_xmlns:srvd': 'http://www.sap.com/adt/ddic/srvd/sources',
+      'srvdSource:srvdSource': {
+        '@_xmlns:srvdSource': 'http://www.sap.com/adt/ddic/srvdsources',
         '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
         '@_adtcore:name': args.name.toUpperCase(),
         '@_adtcore:description': args.description,
-        '@_adtcore:packageRef': args.packageName,
+        '@_adtcore:masterLanguage': 'EN',
+        '@_srvdSource:serviceDefinitionType': 'ODATA',
+        'adtcore:packageRef': {
+          '@_adtcore:name': args.packageName,
+        },
         ...(exposedEntitiesXml.length > 0 && {
-          'srvd:exposedEntities': {
-            'srvd:entity': exposedEntitiesXml,
+          'srvdSource:exposedEntities': {
+            'srvdSource:entity': exposedEntitiesXml,
           },
         }),
       },
@@ -398,6 +520,8 @@ export class CDSToolHandler {
   }
 
   private buildServiceBindingXML(args: CreateServiceBindingInput): string {
+    // SAP ADT expects namespace: http://www.sap.com/adt/ddic/ServiceBindings (CamelCase)
+    // Package must be passed as child element, not attribute (same as DDIC objects)
     const bindingTypeMap: Record<string, string> = {
       ODATA_V2: 'ODATA_V2_UI',
       ODATA_V4: 'ODATA_V4_UI',
@@ -406,14 +530,17 @@ export class CDSToolHandler {
     };
 
     const obj = {
-      'srvb:serviceBinding': {
-        '@_xmlns:srvb': 'http://www.sap.com/adt/businessservices/bindings',
+      'serviceBinding:serviceBinding': {
+        '@_xmlns:serviceBinding': 'http://www.sap.com/adt/ddic/ServiceBindings',
         '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
         '@_adtcore:name': args.name.toUpperCase(),
         '@_adtcore:description': args.description,
-        '@_adtcore:packageRef': args.packageName,
-        '@_srvb:serviceDefinition': args.serviceDefinition.toUpperCase(),
-        '@_srvb:bindingType': bindingTypeMap[args.bindingType] || args.bindingType,
+        '@_adtcore:masterLanguage': 'EN',
+        'adtcore:packageRef': {
+          '@_adtcore:name': args.packageName,
+        },
+        '@_serviceBinding:serviceDefinition': args.serviceDefinition.toUpperCase(),
+        '@_serviceBinding:bindingType': bindingTypeMap[args.bindingType] || args.bindingType,
       },
     };
     return buildXML(obj);

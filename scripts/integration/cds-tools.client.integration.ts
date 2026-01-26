@@ -278,6 +278,60 @@ define view ${createdCdsView} as select from t000 {
       }
     }
   );
+
+  // ============================================================
+  // DELETE OPERATIONS (Cleanup)
+  // ============================================================
+
+  // Delete in reverse order of dependencies: Service Binding -> Service Definition -> CDS View
+
+  // Test: Delete Service Binding
+  if (createdServiceBind) {
+    await runner.runToolTest(
+      'Delete Service Binding',
+      'delete_cds_object',
+      {
+        name: createdServiceBind,
+        objectType: 'SRVB',
+      },
+      (response) => {
+        hasData(response);
+        hasSuccess(response);
+      }
+    );
+  }
+
+  // Test: Delete Service Definition
+  if (createdServiceDef) {
+    await runner.runToolTest(
+      'Delete Service Definition',
+      'delete_cds_object',
+      {
+        name: createdServiceDef,
+        objectType: 'SRVD',
+      },
+      (response) => {
+        hasData(response);
+        hasSuccess(response);
+      }
+    );
+  }
+
+  // Test: Delete CDS View
+  if (createdCdsView) {
+    await runner.runToolTest(
+      'Delete CDS View',
+      'delete_cds_object',
+      {
+        name: createdCdsView,
+        objectType: 'DDLS',
+      },
+      (response) => {
+        hasData(response);
+        hasSuccess(response);
+      }
+    );
+  }
 }
 
 // Run the tests

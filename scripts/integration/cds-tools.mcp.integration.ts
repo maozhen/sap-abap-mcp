@@ -5,10 +5,10 @@
  * This test file directly calls MCP tools to ensure no functionality is missed.
  * Test objects use "YMCP_" prefix and are saved in "$TMP" package.
  * 
- * Tools tested (8):
+ * Tools tested (9):
  * - create_cds_view, create_service_definition, create_service_binding
  * - get_cds_view, get_service_binding_url, get_cds_source
- * - update_cds_source, activate_cds_object
+ * - update_cds_source, activate_cds_object, delete_cds_object
  */
 
 import { MCPToolTestClient, TestRunner, TEST_PREFIX, PACKAGE_NAME, log } from './mcp-test-helper';
@@ -29,10 +29,10 @@ async function main(): Promise<void> {
   log(`SAP User: ${connInfo.user}`, 'gray');
   log(`Registered tools: ${client.getToolCount()}`, 'gray');
   
-  // Test object names
-  const cdsViewName = `${TEST_PREFIX}CDS_MCP`;
-  const serviceDefName = `${TEST_PREFIX}SD_MCP`;
-  const serviceBindingName = `${TEST_PREFIX}SB_MCP`;
+  // Test object names (use suffix "6" to avoid locked objects)
+  const cdsViewName = `${TEST_PREFIX}CDS_MCP6`;
+  const serviceDefName = `${TEST_PREFIX}SD_MCP6`;
+  const serviceBindingName = `${TEST_PREFIX}SB_MCP6`;
   
   // ============================================
   // CDS View Tests (create_cds_view, get_cds_view, get_cds_source, update_cds_source, activate_cds_object)
@@ -93,7 +93,9 @@ async function main(): Promise<void> {
   );
   
   // Update CDS source with annotation
-  const cdsSource = `@AbapCatalog.sqlViewName: '${cdsViewName}'
+  // Note: sqlViewName must be different from CDS view name (SAP restriction)
+  const sqlViewName = `${TEST_PREFIX}SQLV6`;
+  const cdsSource = `@AbapCatalog.sqlViewName: '${sqlViewName}'
 @AbapCatalog.compiler.compareFilter: true
 @AccessControl.authorizationCheck: #NOT_REQUIRED
 @EndUserText.label: 'MCP Test CDS View'
@@ -227,6 +229,60 @@ define view ${cdsViewName} as select from t000 {
         throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
       }
       log(`  Service URL: ${data?.url || 'N/A'}`, 'gray');
+    }
+  );
+  
+  // ============================================
+  // Delete Tests (delete_cds_object)
+  // Delete in reverse dependency order: Service Binding -> Service Definition -> CDS View
+  // ============================================
+  
+  log('\n' + '─'.repeat(40), 'cyan');
+  log('DELETE TESTS', 'cyan');
+  log('─'.repeat(40), 'cyan');
+  
+  await runner.runToolTest(
+    'Delete Service Binding via MCP',
+    'delete_cds_object',
+    {
+      name: serviceBindingName,
+      objectType: 'SRVB',
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  await runner.runToolTest(
+    'Delete Service Definition via MCP',
+    'delete_cds_object',
+    {
+      name: serviceDefName,
+      objectType: 'SRVD',
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
+    }
+  );
+  
+  await runner.runToolTest(
+    'Delete CDS View via MCP',
+    'delete_cds_object',
+    {
+      name: cdsViewName,
+      objectType: 'DDLS',
+    },
+    (response) => {
+      const data = response.data as any;
+      if (!data?.success) {
+        throw new Error(`Expected success=true, got: ${JSON.stringify(data)}`);
+      }
     }
   );
   

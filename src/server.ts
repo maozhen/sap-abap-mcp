@@ -918,7 +918,11 @@ ENDFUNCTION.
           required: ['cdsViewName'],
         },
       },
-      handler: (args) => this.cdsHandler.getCDSView(args as unknown as GetCDSViewInput),
+      handler: (args) => {
+        // Map 'cdsViewName' to 'name' as expected by GetCDSViewInput
+        const mappedArgs = { name: (args as Record<string, unknown>).cdsViewName as string };
+        return this.cdsHandler.getCDSView(mappedArgs as GetCDSViewInput);
+      },
     });
 
     // get_service_binding_url
@@ -950,7 +954,14 @@ ENDFUNCTION.
           required: ['cdsViewName'],
         },
       },
-      handler: (args) => this.cdsHandler.getCDSSource(args as unknown as GetCDSSourceInput),
+      handler: (args) => {
+        // Map 'cdsViewName' to 'name' as expected by GetCDSSourceInput
+        // Support both 'cdsViewName' and 'name' parameters
+        const typedArgs = args as Record<string, unknown>;
+        const name = (typedArgs.cdsViewName || typedArgs.name) as string;
+        const mappedArgs = { name };
+        return this.cdsHandler.getCDSSource(mappedArgs as GetCDSSourceInput);
+      },
     });
 
     // update_cds_source
@@ -968,7 +979,16 @@ ENDFUNCTION.
           required: ['cdsViewName', 'source'],
         },
       },
-      handler: (args) => this.cdsHandler.updateCDSSource(args as unknown as UpdateCDSSourceInput),
+      handler: (args) => {
+        // Map 'cdsViewName' to 'name' as expected by UpdateCDSSourceInput
+        const typedArgs = args as Record<string, unknown>;
+        const mappedArgs = {
+          name: typedArgs.cdsViewName as string,
+          source: typedArgs.source as string,
+          transportRequest: typedArgs.transportRequest as string | undefined,
+        };
+        return this.cdsHandler.updateCDSSource(mappedArgs as UpdateCDSSourceInput);
+      },
     });
 
     // activate_cds_object
@@ -985,7 +1005,42 @@ ENDFUNCTION.
           required: ['objectType', 'objectName'],
         },
       },
-      handler: (args) => this.cdsHandler.activateCDSObject(args as unknown as ActivateCDSObjectInput),
+      handler: (args) => {
+        // Map 'objectName' to 'name' as expected by ActivateCDSObjectInput
+        const typedArgs = args as Record<string, unknown>;
+        const mappedArgs = {
+          name: typedArgs.objectName as string,
+          objectType: typedArgs.objectType as 'DDLS' | 'DCLS' | 'DDLX' | 'SRVD' | 'SRVB',
+        };
+        return this.cdsHandler.activateCDSObject(mappedArgs as ActivateCDSObjectInput);
+      },
+    });
+
+    // delete_cds_object
+    this.tools.set('delete_cds_object', {
+      tool: {
+        name: 'delete_cds_object',
+        description: 'Delete a CDS object (CDS view, service definition, or service binding)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objectType: { type: 'string', enum: ['DDLS', 'SRVD', 'SRVB'], description: 'Object type' },
+            objectName: { type: 'string', description: 'Object name' },
+            transportRequest: { type: 'string', description: 'Transport request number (optional for $TMP objects)' },
+          },
+          required: ['objectType', 'objectName'],
+        },
+      },
+      handler: (args) => {
+        // Map 'objectName' to 'name' as expected by DeleteCDSObjectInput
+        const typedArgs = args as Record<string, unknown>;
+        const mappedArgs = {
+          name: typedArgs.objectName as string,
+          objectType: typedArgs.objectType as 'DDLS' | 'DCLS' | 'DDLX' | 'SRVD' | 'SRVB',
+          transportRequest: typedArgs.transportRequest as string | undefined,
+        };
+        return this.cdsHandler.deleteCDSObject(mappedArgs);
+      },
     });
   }
 

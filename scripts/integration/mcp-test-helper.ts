@@ -350,7 +350,25 @@ export class MCPToolTestClient {
     });
     
     this.tools.set('activate_cds_object', {
-      handler: (args) => this.cdsHandler.activateCDSObject(args as any),
+      handler: (args) => {
+        // Map objectName to name (MCP schema uses objectName, handler uses name)
+        const mappedArgs = {
+          ...args,
+          name: args.objectName || args.name,
+        };
+        return this.cdsHandler.activateCDSObject(mappedArgs as any);
+      },
+    });
+    
+    this.tools.set('delete_cds_object', {
+      handler: (args) => {
+        // Map objectName to name if needed (MCP schema uses objectName, handler uses name)
+        const mappedArgs = {
+          ...args,
+          name: args.objectName || args.name,
+        };
+        return this.cdsHandler.deleteCDSObject(mappedArgs as any);
+      },
     });
   }
 

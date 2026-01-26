@@ -96,10 +96,15 @@ async function main(): Promise<void> {
   
   // Initialize client and handler
   const adtClient = new ADTClient({
-    baseUrl: SAP_URL,
-    client: SAP_CLIENT,
-    username: SAP_USER,
-    password: SAP_PASSWORD,
+    connection: {
+      host: new URL(SAP_URL).hostname,
+      port: parseInt(new URL(SAP_URL).port) || 443,
+      https: SAP_URL.startsWith('https'),
+      client: SAP_CLIENT,
+      username: SAP_USER,
+      password: SAP_PASSWORD,
+      allowInsecure: true,
+    },
   });
   
   const cdsHandler = new CDSToolHandler(adtClient);
@@ -129,7 +134,6 @@ define view ${cdsViewName}
     const result = await cdsHandler.createCDSView({
       name: cdsViewName,
       description: 'Test CDS view created by integration test',
-      dataSource: 't000',
       sqlViewName: `${TEST_PREFIX}SQLV`,
       sourceCode,
       packageName: PACKAGE_NAME,
@@ -401,6 +405,51 @@ define role ${dclsName} {
       // Metadata extension tests may fail if the object doesn't exist
       log(`  Metadata extension test skipped: ${error}`, 'yellow');
     }
+  });
+  
+  // ============================================
+  // DELETE Operations (Cleanup)
+  // ============================================
+  
+  // Delete in reverse order of dependencies: Service Binding -> Service Definition -> CDS View
+  
+  await runTest('Delete Service Binding', async () => {
+    const result = await cdsHandler.deleteCDSObject({
+      name: serviceBindName,
+      objectType: 'SRVB',
+    });
+    
+    if (!result.success) {
+      throw new Error(`Delete failed: ${result.error?.message}`);
+    }
+    
+    log(`  Service binding ${serviceBindName} deleted`, 'gray');
+  });
+  
+  await runTest('Delete Service Definition', async () => {
+    const result = await cdsHandler.deleteCDSObject({
+      name: serviceDefName,
+      objectType: 'SRVD',
+    });
+    
+    if (!result.success) {
+      throw new Error(`Delete failed: ${result.error?.message}`);
+    }
+    
+    log(`  Service definition ${serviceDefName} deleted`, 'gray');
+  });
+  
+  await runTest('Delete CDS View', async () => {
+    const result = await cdsHandler.deleteCDSObject({
+      name: cdsViewName,
+      objectType: 'DDLS',
+    });
+    
+    if (!result.success) {
+      throw new Error(`Delete failed: ${result.error?.message}`);
+    }
+    
+    log(`  CDS view ${cdsViewName} deleted`, 'gray');
   });
   
   // Print summary

@@ -40,6 +40,7 @@ export {
   UpdateCDSSourceInput,
   ActivateCDSObjectInput,
   GetServiceBindingUrlInput,
+  DeleteCDSObjectInput,
 } from './cds-tools';
 
 // Testing Tools - Unit testing and coverage
@@ -329,6 +330,12 @@ export const TOOL_DEFINITIONS = {
     description: 'Get CDS view annotations',
     handler: 'cds',
     method: 'getCDSAnnotations',
+  },
+  deleteCDSObject: {
+    name: 'delete_cds_object',
+    description: 'Delete a CDS object (DDLS, DCLS, DDLX, SRVD, SRVB)',
+    handler: 'cds',
+    method: 'deleteCDSObject',
   },
 
   // Testing Tools
