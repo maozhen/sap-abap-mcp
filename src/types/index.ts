@@ -53,6 +53,8 @@ export interface MCPServerConfig {
   timeout?: number;
   /** Maximum retry attempts */
   maxRetries?: number;
+  /** Default package name for creating objects (from SAP_PACKAGE_NAME env var) */
+  packageName?: string;
 }
 
 // ============================================================================

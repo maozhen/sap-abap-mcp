@@ -215,10 +215,9 @@ export class SAPABAPMCPServer {
                 heading: { type: 'string', description: 'Column heading (55 chars)' },
               },
             },
-            package: { type: 'string', description: 'Package/devclass for the object' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'package'],
+          required: ['name', 'description'],
         },
       },
       handler: (args) => this.ddicHandler.createDataElement(this.mapArgs<CreateDataElementInput>(args)),
@@ -253,10 +252,9 @@ export class SAPABAPMCPServer {
               },
               description: 'Fixed values/value range',
             },
-            package: { type: 'string', description: 'Package/devclass for the object' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'dataType', 'length', 'package'],
+          required: ['name', 'description', 'dataType', 'length'],
         },
       },
       handler: (args) => this.ddicHandler.createDomain(this.mapArgs<CreateDomainInput>(args)),
@@ -288,10 +286,9 @@ export class SAPABAPMCPServer {
               },
               description: 'Table fields definition',
             },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'deliveryClass', 'fields', 'package'],
+          required: ['name', 'description', 'deliveryClass', 'fields'],
         },
       },
       handler: (args) => this.ddicHandler.createDatabaseTable(this.mapArgs<CreateTableInput>(args)),
@@ -319,10 +316,9 @@ export class SAPABAPMCPServer {
               },
               description: 'Structure components',
             },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'components', 'package'],
+          required: ['name', 'description', 'components'],
         },
       },
       handler: (args) => this.ddicHandler.createStructure(this.mapArgs<CreateStructureInput>(args)),
@@ -346,10 +342,9 @@ export class SAPABAPMCPServer {
               items: { type: 'string' },
               description: 'Key component names',
             },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'lineType', 'package'],
+          required: ['name', 'description', 'lineType'],
         },
       },
       handler: (args) => this.ddicHandler.createTableType(this.mapArgs<CreateTableTypeInput>(args)),
@@ -431,10 +426,9 @@ export class SAPABAPMCPServer {
             isAbstract: { type: 'boolean', description: 'Abstract class flag' },
             isFinal: { type: 'boolean', description: 'Final class flag' },
             visibility: { type: 'string', enum: ['PUBLIC', 'PROTECTED', 'PRIVATE'], description: 'Default visibility' },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'package'],
+          required: ['name', 'description'],
         },
       },
       handler: (args) => this.programHandler.createClass(this.mapArgs<CreateClassInput>(args)),
@@ -466,10 +460,9 @@ export class SAPABAPMCPServer {
               },
               description: 'Interface methods',
             },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'package'],
+          required: ['name', 'description'],
         },
       },
       handler: (args) => this.programHandler.createInterface(this.mapArgs<CreateInterfaceInput>(args)),
@@ -485,10 +478,9 @@ export class SAPABAPMCPServer {
           properties: {
             name: { type: 'string', description: 'Function group name (e.g., ZMYFUGR)' },
             description: { type: 'string', description: 'Short description' },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'package'],
+          required: ['name', 'description'],
         },
       },
       handler: (args) => this.programHandler.createFunctionGroup(this.mapArgs<CreateFunctionGroupInput>(args)),
@@ -567,10 +559,9 @@ export class SAPABAPMCPServer {
               description: 'Exceptions',
             },
             isRFC: { type: 'boolean', description: 'RFC enabled flag' },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'functionGroup', 'description', 'package'],
+          required: ['name', 'functionGroup', 'description'],
         },
       },
       handler: (args) => this.programHandler.createFunctionModule(this.mapFunctionModuleArgs(args)),
@@ -587,17 +578,16 @@ export class SAPABAPMCPServer {
             name: { type: 'string', description: 'Report name (e.g., ZMYREPORT)' },
             description: { type: 'string', description: 'Short description' },
             reportType: { type: 'string', enum: ['EXECUTABLE', 'INCLUDE', 'MODULE_POOL'], description: 'Report type' },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'package'],
+          required: ['name', 'description'],
         },
       },
       handler: (args) => {
-        // Map 'package' to 'packageName' and 'reportType' to 'programType'
+        // Map 'reportType' to 'programType' and inject packageName from config
         const mappedArgs = {
           ...args,
-          packageName: (args as Record<string, unknown>).package as string,
+          packageName: this.config.packageName,
           programType: this.mapReportType((args as Record<string, unknown>).reportType as string),
         };
         return this.programHandler.createReportProgram(mappedArgs as unknown as CreateReportProgramInput);
@@ -845,10 +835,9 @@ ENDFUNCTION.
               items: { type: 'string' },
               description: 'CDS annotations',
             },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'sqlViewName', 'dataSource', 'fields', 'package'],
+          required: ['name', 'description', 'sqlViewName', 'dataSource', 'fields'],
         },
       },
       handler: (args) => this.cdsHandler.createCDSView(this.mapArgs<CreateCDSViewInput>(args)),
@@ -876,10 +865,9 @@ ENDFUNCTION.
               },
               description: 'Entities to expose',
             },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'exposedEntities', 'package'],
+          required: ['name', 'description', 'exposedEntities'],
         },
       },
       handler: (args) => this.cdsHandler.createServiceDefinition(this.mapArgs<CreateServiceDefinitionInput>(args)),
@@ -897,10 +885,9 @@ ENDFUNCTION.
             description: { type: 'string', description: 'Short description' },
             serviceDefinition: { type: 'string', description: 'Service definition name' },
             bindingType: { type: 'string', enum: ['ODATA_V2', 'ODATA_V4'], description: 'OData version' },
-            package: { type: 'string', description: 'Package/devclass' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'serviceDefinition', 'bindingType', 'package'],
+          required: ['name', 'description', 'serviceDefinition', 'bindingType'],
         },
       },
       handler: (args) => this.cdsHandler.createServiceBinding(this.mapArgs<CreateServiceBindingInput>(args)),
@@ -1212,13 +1199,12 @@ ENDFUNCTION.
               },
               description: 'Message definitions',
             },
-            packageName: { type: 'string', description: 'Package name' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'packageName'],
+          required: ['name', 'description'],
         },
       },
-      handler: (args) => this.systemHandler.createMessageClass(args as unknown as CreateMessageClassInput),
+      handler: (args) => this.systemHandler.createMessageClass(this.mapArgs<CreateMessageClassInput>(args)),
     });
 
     // get_number_range
@@ -1265,13 +1251,12 @@ ENDFUNCTION.
               },
               description: 'Number range intervals',
             },
-            packageName: { type: 'string', description: 'Package name' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
-          required: ['name', 'description', 'numberLength', 'intervals', 'packageName'],
+          required: ['name', 'description', 'numberLength', 'intervals'],
         },
       },
-      handler: (args) => this.systemHandler.createNumberRange(args as unknown as CreateNumberRangeInput),
+      handler: (args) => this.systemHandler.createNumberRange(this.mapArgs<CreateNumberRangeInput>(args)),
     });
   }
 
@@ -1527,15 +1512,16 @@ ENDFUNCTION.
   /**
    * Map MCP schema property names to handler input property names
    * Common mappings:
-   * - 'package' -> 'packageName'
+   * - Inject packageName from config (SAP_PACKAGE_NAME env var)
    * - 'domain' -> 'domainName'  
    */
   private mapArgs<T>(args: Record<string, unknown>): T {
     const mapped: Record<string, unknown> = { ...args };
     
-    // Map 'package' to 'packageName'
-    if ('package' in args && !('packageName' in args)) {
-      mapped.packageName = args.package;
+    // Inject packageName from config (SAP_PACKAGE_NAME env var)
+    // This is mandatory for create operations
+    if (this.config.packageName && !('packageName' in args)) {
+      mapped.packageName = this.config.packageName;
     }
     
     // Map 'domain' to 'domainName' for data elements
@@ -1569,9 +1555,9 @@ ENDFUNCTION.
   private mapFunctionModuleArgs(args: Record<string, unknown>): CreateFunctionModuleInput {
     const mapped: Record<string, unknown> = { ...args };
     
-    // Map 'package' to 'packageName'
-    if ('package' in args && !('packageName' in args)) {
-      mapped.packageName = args.package;
+    // Inject packageName from config (SAP_PACKAGE_NAME env var)
+    if (this.config.packageName && !('packageName' in args)) {
+      mapped.packageName = this.config.packageName;
     }
 
     // Helper function to map parameter array properties

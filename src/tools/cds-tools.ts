@@ -383,10 +383,12 @@ export class CDSToolHandler {
 
   /**
    * Delete a CDS object (DDLS, DCLS, DDLX, SRVD, SRVB)
-   * Uses lock-based deletion flow:
-   * 1. Lock the object
-   * 2. Delete with lock handle
-   * 3. Unlock if delete fails
+   * Uses ADT Deletion API which does NOT require locking.
+   * This avoids CSRF token issues that can occur with lock-based deletion.
+   * 
+   * API Flow:
+   * 1. POST /sap/bc/adt/deletion/check - Check if object can be deleted
+   * 2. POST /sap/bc/adt/deletion/delete - Execute the deletion
    */
   async deleteCDSObject(args: DeleteCDSObjectInput): Promise<ToolResponse<void>> {
     this.logger.info(`Deleting CDS object: ${args.objectType}/${args.name}`);
@@ -397,38 +399,17 @@ export class CDSToolHandler {
     }
 
     const uri = buildObjectUri(uriPrefix, args.name);
-    let lockHandle: LockHandle | undefined;
 
     try {
-      // Step 1: Lock the object
-      lockHandle = await this.adtClient.lockObject(uri);
-      this.logger.debug(`CDS object ${args.name} locked: ${lockHandle.lockHandle}`);
-
-      // Step 2: Delete the object
-      const params: Record<string, string> = {};
-      if (args.transportRequest) {
-        params.corrNr = args.transportRequest;
-      }
-
-      await this.adtClient.delete(uri, {
-        headers: {
-          'X-sap-adt-sessiontype': 'stateful',
-        },
-        params: Object.keys(params).length > 0 ? params : undefined,
-      });
+      // Use ADT Deletion API - no locking required
+      // This method handles the full deletion workflow:
+      // 1. Check if object can be deleted
+      // 2. Execute the deletion
+      await this.adtClient.deleteObject(uri, args.transportRequest);
 
       this.logger.info(`CDS object ${args.name} deleted successfully`);
       return { success: true };
     } catch (error) {
-      // Ensure unlock on error
-      if (lockHandle) {
-        try {
-          await this.adtClient.unlockObject(uri, lockHandle.lockHandle);
-          this.logger.debug(`CDS object ${args.name} unlocked after error`);
-        } catch (unlockError) {
-          this.logger.warn(`Failed to unlock CDS object after delete error: ${unlockError}`);
-        }
-      }
       this.logger.error(`Failed to delete CDS object ${args.name}`, error);
       return this.createErrorResponse('DELETE_CDS_FAILED', `Failed to delete CDS object: ${error}`, error);
     }
@@ -472,12 +453,19 @@ export class CDSToolHandler {
   private buildCDSViewXML(args: CreateCDSViewInput): string {
     // SAP ADT expects namespace: http://www.sap.com/adt/ddic/ddlsources (plural, no slash)
     // Package must be passed as child element, not attribute (same as DDIC objects)
+    // 
+    // Based on comparison with working DDIC objects (Domain, DataElement, Table):
+    // - Type code 'DDLS/DF' is required for CDS Data Definition (DDL Source)
+    // - This follows the pattern: DTEL/DE, DOMA/DD, TABL/DT, etc.
+    // - Without type code, SAP ADT returns "Check of condition failed" on packageRef
     const obj = {
       'ddlSource:ddlSource': {
         '@_xmlns:ddlSource': 'http://www.sap.com/adt/ddic/ddlsources',
         '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
+        '@_adtcore:type': 'DDLS/DF',
         '@_adtcore:name': args.name.toUpperCase(),
         '@_adtcore:description': args.description,
+        '@_adtcore:language': 'EN',
         '@_adtcore:masterLanguage': 'EN',
         'adtcore:packageRef': {
           '@_adtcore:name': args.packageName,
@@ -511,8 +499,10 @@ export class CDSToolHandler {
       'srvd:srvdSource': {
         '@_xmlns:srvd': 'http://www.sap.com/adt/ddic/srvdsources',
         '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
+        '@_adtcore:type': 'SRVD/SRV',
         '@_adtcore:name': args.name.toUpperCase(),
         '@_adtcore:description': args.description,
+        '@_adtcore:language': 'EN',
         '@_adtcore:masterLanguage': 'EN',
         '@_srvd:sourceOrigin': '0',
         '@_srvd:srvdSourceType': 'S',
@@ -554,8 +544,10 @@ export class CDSToolHandler {
       'srvb:serviceBinding': {
         '@_xmlns:srvb': 'http://www.sap.com/adt/ddic/ServiceBindings',
         '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
+        '@_adtcore:type': 'SRVB/SVB',
         '@_adtcore:name': bindingName,
         '@_adtcore:description': args.description,
+        '@_adtcore:language': 'EN',
         '@_adtcore:masterLanguage': 'EN',
         'adtcore:packageRef': {
           '@_adtcore:name': args.packageName,

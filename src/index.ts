@@ -64,6 +64,21 @@ function buildSAPConfig(): SAPConnectionConfig {
 }
 
 /**
+ * Validate SAP package name format
+ * Package names must start with Z, Y, or $ (customer namespace)
+ */
+function validatePackageName(packageName: string | undefined): string | undefined {
+  const upperName = packageName ? packageName.toUpperCase(): '';
+  if (!upperName.startsWith('Z') && !upperName.startsWith('Y') && !upperName.startsWith('$')) {
+    console.error(`Error: SAP_PACKAGE_NAME must start with Z, Y, or $ (customer namespace)`);
+    console.error(`  Current value: ${packageName}`);
+    process.exit(1);
+  }
+  
+  return packageName;
+}
+
+/**
  * Build MCP server configuration from environment variables
  */
 function buildMCPConfig(sapConnection: SAPConnectionConfig): MCPServerConfig {
@@ -74,6 +89,7 @@ function buildMCPConfig(sapConnection: SAPConnectionConfig): MCPServerConfig {
     logLevel: getOptionalEnv('LOG_LEVEL', 'info') as 'debug' | 'info' | 'warn' | 'error',
     timeout: getNumberEnv('REQUEST_TIMEOUT', 30000),
     maxRetries: getNumberEnv('MAX_RETRIES', 3),
+    packageName: validatePackageName(process.env.SAP_PACKAGE_NAME),
   };
 }
 
@@ -103,6 +119,7 @@ function printConfig(sapConfig: SAPConnectionConfig, mcpConfig: MCPServerConfig)
   console.error(`  Log Level: ${mcpConfig.logLevel}`);
   console.error(`  Timeout: ${mcpConfig.timeout}ms`);
   console.error(`  Max Retries: ${mcpConfig.maxRetries}`);
+  console.error(`  SAP Package: ${mcpConfig.packageName}`);
   console.error('');
 }
 
