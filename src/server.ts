@@ -13,6 +13,7 @@ import {
 import { ADTClient } from './clients/adt-client.js';
 import { Logger, parseLogLevel } from './utils/logger.js';
 import { MCPError, ADTError, wrapError, ErrorCodes } from './utils/errors.js';
+import { encodeObjectNameForUri, encodeFunctionGroupForUri } from './utils/uri-helpers.js';
 import { 
   SAPConnectionConfig, 
   MCPServerConfig,
@@ -1442,6 +1443,12 @@ ENDFUNCTION.
   /**
    * Map objectType + objectName to objectUri
    * Converts MCP schema input (objectType, objectName) to handler input (objectUri)
+   * 
+   * IMPORTANT: Object names containing namespace slashes (e.g., /SMB98/OBJECT_NAME)
+   * must be properly URL-encoded to avoid being interpreted as path separators.
+   * For example:
+   * - Input: /SMB98/PARAMS_FROM_FILENAME
+   * - Encoded: %2fsmb98%2fparams_from_filename
    */
   private mapObjectTypeNameToUri(args: Record<string, unknown>): Record<string, unknown> {
     const mapped: Record<string, unknown> = { ...args };
@@ -1463,11 +1470,15 @@ ENDFUNCTION.
     if (objectType.toUpperCase() === 'FUNC') {
       if (functionGroup) {
         // Correct URI format: /sap/bc/adt/functions/groups/{group_name}/fmodules/{func_name}
-        mapped.objectUri = `/sap/bc/adt/functions/groups/${functionGroup.toLowerCase()}/fmodules/${objectName.toLowerCase()}`;
+        // Both functionGroup and objectName need to be encoded for namespace support
+        const encodedGroup = encodeFunctionGroupForUri(functionGroup);
+        const encodedName = encodeObjectNameForUri(objectName);
+        mapped.objectUri = `/sap/bc/adt/functions/groups/${encodedGroup}/fmodules/${encodedName}`;
       } else {
         // Fallback - may not work correctly without function group
         this.logger.warn(`FUNC type without functionGroup parameter - URI may be incorrect for: ${objectName}`);
-        mapped.objectUri = `/sap/bc/adt/functions/groups/unknown/fmodules/${objectName.toLowerCase()}`;
+        const encodedName = encodeObjectNameForUri(objectName);
+        mapped.objectUri = `/sap/bc/adt/functions/groups/unknown/fmodules/${encodedName}`;
       }
       return mapped;
     }
@@ -1484,7 +1495,9 @@ ENDFUNCTION.
     
     const prefix = uriPrefixes[objectType.toUpperCase()];
     if (prefix) {
-      mapped.objectUri = `${prefix}${objectName.toLowerCase()}`;
+      // Encode the object name to handle namespace slashes
+      const encodedName = encodeObjectNameForUri(objectName);
+      mapped.objectUri = `${prefix}${encodedName}`;
     }
     
     return mapped;

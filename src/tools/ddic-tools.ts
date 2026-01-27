@@ -4,6 +4,7 @@
  */
 
 import { ADTClient, LockHandle } from '../clients/adt-client';
+import { encodeObjectNameForUri, buildObjectUri } from '../utils/uri-helpers';
 import {
   ToolResponse,
   DataElement,
@@ -176,7 +177,7 @@ export class DDICToolHandler {
   async createDatabaseTable(args: CreateTableInput): Promise<ToolResponse<DatabaseTable>> {
     this.logger.info(`Creating database table: ${args.name}`);
     const collectionUri = DDIC_URI_PREFIXES.TABL;
-    const objectUri = `${collectionUri}/${args.name.toLowerCase()}`;
+    const objectUri = buildObjectUri(collectionUri, args.name);
     const sourceUri = `${objectUri}/source/main`;
 
     try {
@@ -225,7 +226,7 @@ export class DDICToolHandler {
   async createStructure(args: CreateStructureInput): Promise<ToolResponse<Structure>> {
     this.logger.info(`Creating structure: ${args.name}`);
     const collectionUri = DDIC_URI_PREFIXES.STRU;
-    const objectUri = `${collectionUri}/${args.name.toLowerCase()}`;
+    const objectUri = buildObjectUri(collectionUri, args.name);
     const sourceUri = `${objectUri}/source/main`;
 
     try {
@@ -275,7 +276,7 @@ export class DDICToolHandler {
    */
   async updateStructure(args: UpdateStructureInput): Promise<ToolResponse<Structure>> {
     this.logger.info(`Updating structure: ${args.name}`);
-    const objectUri = `${DDIC_URI_PREFIXES.STRU}/${args.name.toLowerCase()}`;
+    const objectUri = buildObjectUri(DDIC_URI_PREFIXES.STRU, args.name);
     const sourceUri = `${objectUri}/source/main`;
 
     try {
@@ -330,7 +331,7 @@ export class DDICToolHandler {
    */
   async updateDatabaseTable(args: UpdateTableInput): Promise<ToolResponse<DatabaseTable>> {
     this.logger.info(`Updating database table: ${args.name}`);
-    const objectUri = `${DDIC_URI_PREFIXES.TABL}/${args.name.toLowerCase()}`;
+    const objectUri = buildObjectUri(DDIC_URI_PREFIXES.TABL, args.name);
     const sourceUri = `${objectUri}/source/main`;
 
     try {
@@ -436,7 +437,7 @@ export class DDICToolHandler {
         return this.createErrorResponse('INVALID_OBJECT_TYPE', `Invalid DDIC object type: ${args.objectType}`);
       }
 
-      const uri = `${uriPrefix}/${args.name.toLowerCase()}`;
+      const uri = buildObjectUri(uriPrefix, args.name);
       const response = await this.adtClient.getObject(uri);
       const parsed = parseXML<Record<string, unknown>>(response.data);
       const adtObject = this.parseADTObjectFromXML(parsed, args.name, args.objectType as ADTObjectType, uri);
@@ -600,7 +601,7 @@ export class DDICToolHandler {
         return this.createErrorResponse('INVALID_OBJECT_TYPE', `Invalid DDIC object type: ${args.objectType}`);
       }
 
-      const uri = `${uriPrefix}/${args.name.toLowerCase()}`;
+      const uri = buildObjectUri(uriPrefix, args.name);
       const result = await this.adtClient.activate(uri);
 
       const activationResult: ActivationResult = {
@@ -640,7 +641,7 @@ export class DDICToolHandler {
         return this.createErrorResponse('INVALID_OBJECT_TYPE', `Invalid DDIC object type: ${args.objectType}`);
       }
 
-      const uri = `${uriPrefix}/${args.name.toLowerCase()}`;
+      const uri = buildObjectUri(uriPrefix, args.name);
       
       // Use ADTClient's deleteObject method which handles lock -> delete -> unlock
       await this.adtClient.deleteObject(uri, args.transportRequest);

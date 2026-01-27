@@ -29,6 +29,7 @@ import {
 } from '../types';
 import { buildXML, parseXML, getAttribute, getElement, ensureArray } from '../utils/xml-parser';
 import { Logger, logger as defaultLogger } from '../utils/logger';
+import { encodeObjectNameForUri, buildObjectUri, buildFunctionModuleUri } from '../utils/uri-helpers';
 
 // ============================================================================
 // Input Interfaces
@@ -286,10 +287,11 @@ export class ProgramToolHandler {
   async createFunctionModule(args: CreateFunctionModuleInput): Promise<ToolResponse<FunctionModule>> {
     this.logger.info(`Creating function module: ${args.name}`);
     // POST to the fmodules collection within the function group
-    const uri = `/functions/groups/${args.functionGroup.toLowerCase()}/fmodules`;
+    // Use encodeObjectNameForUri to handle namespace objects (e.g., /SMB98/FUNC_GROUP)
+    const uri = buildFunctionModuleUri(args.functionGroup);
 
     let lockHandle: LockHandle | undefined;
-    const fmUri = `/functions/groups/${args.functionGroup.toLowerCase()}/fmodules/${args.name.toLowerCase()}`;
+    const fmUri = buildFunctionModuleUri(args.functionGroup, args.name);
     const sourceUri = `${fmUri}/source/main`;
 
     try {
@@ -564,7 +566,8 @@ export class ProgramToolHandler {
       }
 
       // Build function module URI: /functions/groups/{group}/fmodules/{name}
-      const uri = `/functions/groups/${args.functionGroup.toLowerCase()}/fmodules/${args.name.toLowerCase()}`;
+      // Use encodeObjectNameForUri to handle namespace objects (e.g., /SMB98/FUNC_NAME)
+      const uri = buildFunctionModuleUri(args.functionGroup, args.name);
 
       try {
         await this.adtClient.deleteObject(uri, args.transportRequest);
@@ -593,8 +596,8 @@ export class ProgramToolHandler {
       );
     }
 
-    // Build the object URI
-    const uri = `${uriPrefix}/${args.name.toLowerCase()}`;
+    // Build the object URI with proper encoding for namespace objects
+    const uri = buildObjectUri(uriPrefix, args.name);
 
     try {
       // Use ADT client's deleteObject method (handles lock/delete/unlock)

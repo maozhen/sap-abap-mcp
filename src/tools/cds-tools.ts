@@ -4,6 +4,7 @@
  */
 
 import { ADTClient, LockHandle } from '../clients/adt-client';
+import { encodeObjectNameForUri, buildObjectUri } from '../utils/uri-helpers';
 import {
   ToolResponse,
   CDSView,
@@ -119,7 +120,7 @@ export class CDSToolHandler {
     this.logger.info(`Creating CDS view: ${args.name}`);
     // POST to collection URL, not object URL (same pattern as Domain/DataElement/Table)
     const collectionUri = CDS_URI_PREFIXES.DDLS;
-    const objectUri = `${CDS_URI_PREFIXES.DDLS}/${args.name.toLowerCase()}`;
+    const objectUri = buildObjectUri(CDS_URI_PREFIXES.DDLS, args.name);
 
     try {
       // Step 1: Create basic CDS view (metadata only)
@@ -170,7 +171,7 @@ export class CDSToolHandler {
     this.logger.info(`Creating service definition: ${args.name}`);
     // POST to collection URL, not object URL
     const collectionUri = CDS_URI_PREFIXES.SRVD;
-    const objectUri = `${CDS_URI_PREFIXES.SRVD}/${args.name.toLowerCase()}`;
+    const objectUri = buildObjectUri(CDS_URI_PREFIXES.SRVD, args.name);
 
     try {
       // Step 1: Create basic service definition (metadata only)
@@ -248,7 +249,7 @@ export class CDSToolHandler {
    */
   async getCDSView(args: GetCDSViewInput): Promise<ToolResponse<CDSView>> {
     this.logger.info(`Getting CDS view: ${args.name}`);
-    const uri = `${CDS_URI_PREFIXES.DDLS}/${args.name.toLowerCase()}`;
+    const uri = buildObjectUri(CDS_URI_PREFIXES.DDLS, args.name);
 
     try {
       const response = await this.adtClient.getObject(uri);
@@ -276,7 +277,7 @@ export class CDSToolHandler {
    */
   async getCDSSource(args: GetCDSSourceInput): Promise<ToolResponse<string>> {
     this.logger.info(`Getting CDS source: ${args.name}`);
-    const uri = `${CDS_URI_PREFIXES.DDLS}/${args.name.toLowerCase()}`;
+    const uri = buildObjectUri(CDS_URI_PREFIXES.DDLS, args.name);
 
     try {
       const source = await this.adtClient.getObjectSource(uri);
@@ -297,7 +298,7 @@ export class CDSToolHandler {
    */
   async updateCDSSource(args: UpdateCDSSourceInput): Promise<ToolResponse<void>> {
     this.logger.info(`Updating CDS source: ${args.name}`);
-    const uri = `${CDS_URI_PREFIXES.DDLS}/${args.name.toLowerCase()}`;
+    const uri = buildObjectUri(CDS_URI_PREFIXES.DDLS, args.name);
 
     let lockHandle: LockHandle | undefined;
 
@@ -345,7 +346,7 @@ export class CDSToolHandler {
         return this.createErrorResponse('INVALID_OBJECT_TYPE', `Invalid CDS object type: ${args.objectType}`);
       }
 
-      const uri = `${uriPrefix}/${args.name.toLowerCase()}`;
+      const uri = buildObjectUri(uriPrefix, args.name);
       const result = await this.adtClient.activate(uri);
 
       const activationResult: ActivationResult = {
@@ -395,7 +396,7 @@ export class CDSToolHandler {
       return this.createErrorResponse('INVALID_OBJECT_TYPE', `Invalid CDS object type: ${args.objectType}`);
     }
 
-    const uri = `${uriPrefix}/${args.name.toLowerCase()}`;
+    const uri = buildObjectUri(uriPrefix, args.name);
     let lockHandle: LockHandle | undefined;
 
     try {
@@ -442,7 +443,7 @@ export class CDSToolHandler {
    */
   async getServiceBindingUrl(args: GetServiceBindingUrlInput): Promise<ToolResponse<{ serviceUrl: string; metadataUrl: string }>> {
     this.logger.info(`Getting service binding URL: ${args.name}`);
-    const uri = `${CDS_URI_PREFIXES.SRVB}/${args.name.toLowerCase()}`;
+    const uri = buildObjectUri(CDS_URI_PREFIXES.SRVB, args.name);
 
     try {
       const response = await this.adtClient.getObject(uri);
