@@ -608,11 +608,11 @@ export class SAPABAPMCPServer {
     this.tools.set('get_source_code', {
       tool: {
         name: 'get_source_code',
-        description: 'Get the source code of an ABAP object (class, interface, program, function module)',
+        description: 'Get the source code of an ABAP object (class, interface, program, function module, include)',
         inputSchema: {
           type: 'object',
           properties: {
-            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC'], description: 'Object type' },
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC', 'INCL'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
             functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
           },
@@ -626,7 +626,7 @@ export class SAPABAPMCPServer {
     this.tools.set('update_source_code', {
       tool: {
         name: 'update_source_code',
-        description: `Update the source code of an ABAP object.
+        description: `Update the source code of an ABAP object (class, interface, program, function module, include).
 
 **IMPORTANT for Function Module (FUNC) updates:**
 When updating a Function Module's source code, you MUST use the ADT format (as returned by get_source_code), NOT the SE37 format.
@@ -667,7 +667,7 @@ ENDFUNCTION.
         inputSchema: {
           type: 'object',
           properties: {
-            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC'], description: 'Object type' },
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC', 'INCL'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
             functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
             source: { type: 'string', description: 'New source code' },
@@ -737,11 +737,11 @@ ENDFUNCTION.
     this.tools.set('activate_object', {
       tool: {
         name: 'activate_object',
-        description: 'Activate an ABAP object (class, interface, function module, report)',
+        description: 'Activate an ABAP object (class, interface, function module, report, include)',
         inputSchema: {
           type: 'object',
           properties: {
-            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG'], description: 'Object type' },
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG', 'INCL'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
             functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
           },
@@ -755,11 +755,11 @@ ENDFUNCTION.
     this.tools.set('check_syntax', {
       tool: {
         name: 'check_syntax',
-        description: 'Check syntax of an ABAP object',
+        description: 'Check syntax of an ABAP object (class, interface, function module, report, include)',
         inputSchema: {
           type: 'object',
           properties: {
-            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG'], description: 'Object type' },
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG', 'INCL'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
             functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
           },
@@ -773,11 +773,11 @@ ENDFUNCTION.
     this.tools.set('delete_object', {
       tool: {
         name: 'delete_object',
-        description: 'Delete an ABAP object (class, interface, function group, function module, report). For function modules (FUNC type), the functionGroup parameter is required.',
+        description: 'Delete an ABAP object (class, interface, function group, function module, report, include). For function modules (FUNC type), the functionGroup parameter is required.',
         inputSchema: {
           type: 'object',
           properties: {
-            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG'], description: 'Object type' },
+            objectType: { type: 'string', enum: ['CLAS', 'INTF', 'FUGR', 'FUNC', 'PROG', 'INCL'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
             functionGroup: { type: 'string', description: 'Function group name (required for FUNC type to build correct URI)' },
             transportRequest: { type: 'string', description: 'Transport request number (optional for $TMP objects)' },
