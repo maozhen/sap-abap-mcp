@@ -11,6 +11,7 @@ import {
 } from '../types';
 import { buildXML, parseXML, getAttribute, getElement } from '../utils/xml-parser';
 import { Logger, logger as defaultLogger } from '../utils/logger';
+import { encodeObjectNameForUri } from '../utils/uri-helpers';
 
 // Input interfaces
 export interface GetSystemInfoInput {
@@ -221,7 +222,9 @@ export class SystemToolHandler {
     this.logger.info(`Getting package info: ${args.packageName}`);
 
     try {
-      const uri = `${PACKAGE_URI_PREFIX}/${args.packageName.toLowerCase()}`;
+      // Use encodeObjectNameForUri to handle package names with '/' (namespaced packages)
+      // e.g., /NAMESPACE/PACKAGE -> %2fnamespace%2fpackage
+      const uri = `${PACKAGE_URI_PREFIX}/${encodeObjectNameForUri(args.packageName)}`;
       // Use flexible Accept header with fallback for different SAP versions
       const response = await this.adtClient.get(uri, {
         headers: { 'Accept': 'application/vnd.sap.adt.packages.v1+xml, application/xml, */*' },
@@ -251,7 +254,8 @@ export class SystemToolHandler {
 
     try {
       const requestXml = this.buildPackageXML(args);
-      const uri = `${PACKAGE_URI_PREFIX}/${args.name.toLowerCase()}`;
+      // Use encodeObjectNameForUri to handle package names with '/' (namespaced packages)
+      const uri = `${PACKAGE_URI_PREFIX}/${encodeObjectNameForUri(args.name)}`;
 
       const response = await this.adtClient.post(uri, requestXml, {
         headers: { 'Content-Type': 'application/vnd.sap.adt.packages.v1+xml' },
