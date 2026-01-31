@@ -659,7 +659,7 @@ ENDFUNCTION.
           properties: {
             objectType: { type: 'string', enum: ['CLAS', 'INTF', 'PROG', 'FUGR', 'FUNC', 'INCL'], description: 'Object type' },
             objectName: { type: 'string', description: 'Object name' },
-            functionGroup: { type: 'string', description: 'Function group name (required for FUNC type)' },
+            functionGroup: { type: 'string', description: 'Function group name (required for FUNC type, optional for INCL type - auto-detected from naming convention L{FUGR}TOP/UXX/F01 etc.)' },
             source: { type: 'string', description: 'New source code' },
             transportRequest: { type: 'string', description: 'Transport request number' },
           },
@@ -1464,6 +1464,42 @@ ENDFUNCTION.
         this.logger.warn(`FUNC type without functionGroup parameter - URI may be incorrect for: ${objectName}`);
         const encodedName = encodeObjectNameForUri(objectName);
         mapped.objectUri = `/sap/bc/adt/functions/groups/unknown/fmodules/${encodedName}`;
+      }
+      return mapped;
+    }
+    
+    // Special handling for INCL type - requires functionGroup for function group includes
+    if (objectType.toUpperCase() === 'INCL') {
+      // Try to infer function group from include name if not provided
+      // Function Group Include naming convention: L{FUGR}{suffix}
+      // Common suffixes: TOP, UXX, F01, F02, etc.
+      // Examples: LZ_SOLUTION_COMPARETOP -> Z_SOLUTION_COMPARE, LZ_MYFUGRF01 -> Z_MYFUGR
+      let effectiveFunctionGroup = functionGroup;
+      
+      if (!effectiveFunctionGroup) {
+        const upperName = objectName.toUpperCase();
+        // Check if it matches function group include pattern: L{FUGR}{suffix}
+        // Pattern: starts with L, ends with TOP/UXX/F01/F02/.../F99/E01/.../E99/I01/.../I99/O01/.../O99
+        const fugrIncludePattern = /^L(.+?)(TOP|UXX|U\d{2}|F\d{2}|E\d{2}|I\d{2}|O\d{2})$/;
+        const match = upperName.match(fugrIncludePattern);
+        if (match) {
+          effectiveFunctionGroup = match[1]; // Extracted function group name
+          this.logger.debug(`Auto-detected function group '${effectiveFunctionGroup}' from include name '${objectName}'`);
+        }
+      }
+      
+      if (effectiveFunctionGroup) {
+        // Function Group Include: /sap/bc/adt/functions/groups/{group}/includes/{name}
+        // Both functionGroup and objectName need to be encoded for namespace support
+        const encodedGroup = encodeFunctionGroupForUri(effectiveFunctionGroup);
+        const encodedName = encodeObjectNameForUri(objectName);
+        mapped.objectUri = `/sap/bc/adt/functions/groups/${encodedGroup}/includes/${encodedName}`;
+        this.logger.debug(`Built function group include URI: ${mapped.objectUri}`);
+      } else {
+        // Normal program include: /sap/bc/adt/programs/includes/{name}
+        const encodedName = encodeObjectNameForUri(objectName);
+        mapped.objectUri = `/sap/bc/adt/programs/includes/${encodedName}`;
+        this.logger.debug(`Built normal include URI: ${mapped.objectUri}`);
       }
       return mapped;
     }

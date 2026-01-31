@@ -481,7 +481,7 @@ export class ProgramToolHandler {
         }
       }
       this.logger.error(`Failed to update source code for ${args.objectUri}`, error);
-      return this.createErrorResponse('UPDATE_SOURCE_FAILED', `Failed to update source code: ${error}`, error);
+      return this.createErrorResponse('UPDATE_SOURCE_FAILED', `Failed to update source code (URI: ${args.objectUri}): ${error}`, error);
     }
   }
 
