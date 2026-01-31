@@ -174,6 +174,7 @@ const PROGRAM_URI_PREFIXES: Record<string, string> = {
   FUGR: '/functions/groups',
   FUNC: '/functions',
   PROG: '/programs/programs',
+  INCL: '/programs/includes',
 };
 
 // ============================================================================
@@ -396,17 +397,26 @@ export class ProgramToolHandler {
 
   /**
    * Create a new report program
-   * POST to collection URL: /programs/programs (not /programs/programs/{name})
+   * POST to collection URL: 
+   * - For executable/modulePool/subroutinePool: /programs/programs
+   * - For include: /programs/includes
    */
   async createReportProgram(args: CreateReportProgramInput): Promise<ToolResponse<ReportProgram>> {
-    this.logger.info(`Creating report program: ${args.name}`);
-    // POST to collection URL, not object URL
-    const uri = PROGRAM_URI_PREFIXES.PROG;
+    this.logger.info(`Creating report program: ${args.name} (type: ${args.programType})`);
+    // POST to collection URL - use different URI for include programs
+    const uri = args.programType === 'include' 
+      ? PROGRAM_URI_PREFIXES.INCL 
+      : PROGRAM_URI_PREFIXES.PROG;
 
     try {
       const requestXml = this.buildReportProgramXML(args);
+      // Use different content type for include programs
+      const contentType = args.programType === 'include'
+        ? 'application/vnd.sap.adt.programs.includes.v2+xml'
+        : 'application/vnd.sap.adt.programs.programs.v2+xml';
+      
       const response = await this.adtClient.post(uri, requestXml, {
-        headers: { 'Content-Type': 'application/vnd.sap.adt.programs.programs.v2+xml' },
+        headers: { 'Content-Type': contentType },
         params: args.transportRequest ? { corrNr: args.transportRequest } : undefined,
       });
 
@@ -1042,9 +1052,13 @@ export class ProgramToolHandler {
   }
 
   private buildReportProgramXML(args: CreateReportProgramInput): string {
+    // Include programs use a different XML structure
+    if (args.programType === 'include') {
+      return this.buildIncludeProgramXML(args);
+    }
+
     const programTypeMap: Record<string, string> = {
       executable: '1',
-      include: 'I',
       modulePool: 'M',
       subroutinePool: 'S',
     };
@@ -1061,6 +1075,29 @@ export class ProgramToolHandler {
         '@_program:programType': programTypeMap[args.programType] || '1',
         '@_program:fixedPointArithmetic': args.fixedPointArithmetic !== false,
         '@_program:unicodeCheck': args.unicodeCheck !== false,
+        'adtcore:packageRef': {
+          '@_adtcore:name': args.packageName,
+        },
+      },
+    };
+    return buildXML(obj);
+  }
+
+  /**
+   * Build XML for Include program creation
+   * Include programs use namespace http://www.sap.com/adt/programs/includes
+   * and type PROG/I
+   */
+  private buildIncludeProgramXML(args: CreateReportProgramInput): string {
+    const obj = {
+      'include:abapInclude': {
+        '@_xmlns:include': 'http://www.sap.com/adt/programs/includes',
+        '@_xmlns:adtcore': 'http://www.sap.com/adt/core',
+        '@_adtcore:description': args.description,
+        '@_adtcore:language': 'EN',
+        '@_adtcore:name': args.name.toUpperCase(),
+        '@_adtcore:type': 'PROG/I',
+        '@_adtcore:masterLanguage': 'EN',
         'adtcore:packageRef': {
           '@_adtcore:name': args.packageName,
         },
